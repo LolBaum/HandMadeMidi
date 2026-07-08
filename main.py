@@ -3,6 +3,10 @@ from vision import Vision
 from landmarks import LandmarkExtractor
 from hand_features import HandFeatures
 
+# Define the 5 landmarks we care about (for visualization)
+PALM_LANDMARKS = [0, 5, 9, 13, 17]  # Wrist, Index MCP, Middle MCP, Ring MCP, Pinky MCP
+LANDMARK_NAMES = ["0:Wrist", "1:Idx", "2:Mid", "3:Ring", "4:Pinky"]
+
 vision = Vision()
 extractor = LandmarkExtractor()
 features = HandFeatures()
@@ -22,24 +26,34 @@ while True:
         )
 
         landmarks = extractor.get_landmarks(results)
+        h, w, _ = frame.shape
 
-        # Get both angle types
-        flexion_angles = features.finger_orientations(landmarks)
-        orientation_angles = features.finger_orientations(landmarks)
+        # --- Draw the 5 palm landmarks with numbers ---
+        for idx, lm_idx in enumerate(PALM_LANDMARKS):
+            x = int(landmarks[lm_idx][0] * w)
+            y = int(landmarks[lm_idx][1] * h)
 
-        # Display Flexion angles (top left)
-        y = 30
-        for finger, angle in flexion_angles.items():
-            text = f"Flex {finger}: {angle:.1f}"
-            cv2.putText(frame, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            y += 25
+            # Draw a bright circle
+            cv2.circle(frame, (x, y), 8, (0, 255, 255), -1)
 
-        # Display Orientation angles (top right, or below flexion)
-        y = 30
-        for name, angle in orientation_angles.items():
-            text = f"Orient {name}: {angle:.1f}"
-            cv2.putText(frame, text, (frame.shape[1] // 2, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            y += 25
+            # Put the number (0, 1, 2, 3, 4) inside the circle
+            cv2.putText(frame, str(idx), (x - 6, y + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+            # Put the name slightly above/right
+            cv2.putText(frame, LANDMARK_NAMES[idx], (x + 10, y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+        # --- Calculate and display Hand Orientation ---
+        orient = features.hand_orientation(landmarks)
+
+        # Display the values on the top-left corner
+        y_pos = 30
+        for key, value in orient.items():
+            text = f"{key}: {value:.2f}"
+            cv2.putText(frame, text, (20, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            y_pos += 25
 
     cv2.imshow("Motion Controller", frame)
 
