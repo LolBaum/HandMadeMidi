@@ -1,60 +1,52 @@
 import numpy as np
 
-
 class HandFeatures:
 
-    def angle(self, a, b, c):
+    # ... keep your existing angle() and finger_angles() methods ...
 
-        a = np.array(a)
-        b = np.array(b)
-        c = np.array(c)
+    def finger_orientations(self, landmarks):
+        """
+        Returns the 3D orientation (elevation and azimuth) of each finger.
+        Elevation: angle between the finger vector and the XY plane.
+                   Positive = pointing towards the camera (Z increases).
+                   Negative = pointing away from the camera (Z decreases).
+        Azimuth: rotation in the XY plane (like a compass bearing).
+        """
+        # Define the (MCP, TIP) landmark indices for each finger
+        fingers = {
+            "thumb": (1, 4),
+            "index": (5, 8),
+            "middle": (9, 12),
+            "ring": (13, 16),
+            "pinky": (17, 20),
+        }
 
-        ba = a - b
-        bc = c - b
+        orientations = {}
 
-        cosine = np.dot(ba, bc)
+        for name, (mcp_idx, tip_idx) in fingers.items():
+            mcp = np.array(landmarks[mcp_idx])
+            tip = np.array(landmarks[tip_idx])
 
-        cosine /= (
-            np.linalg.norm(ba)
-            * np.linalg.norm(bc)
-        )
+            # Vector from MCP to TIP
+            vec = tip - mcp
+            norm = np.linalg.norm(vec)
 
-        cosine = np.clip(cosine, -1.0, 1.0)
+            if norm < 1e-6:
+                orientations[f"{name}_elevation"] = 0.0
+                orientations[f"{name}_azimuth"] = 0.0
+                continue
 
-        return np.degrees(np.arccos(cosine))
+            # Normalize the vector
+            vec = vec / norm
 
-    def finger_angles(self, landmarks):
+            # Elevation (tilt towards/away from camera)
+            # arcsin of the Z component gives the angle relative to the XY plane
+            elevation = np.degrees(np.arcsin(vec[2]))
 
-        fingers = {}
+            # Azimuth (rotation in the XY plane)
+            azimuth = np.degrees(np.arctan2(vec[1], vec[0]))
 
-        fingers["thumb"] = self.angle(
-            landmarks[1],
-            landmarks[2],
-            landmarks[3],
-        )
+            orientations[f"{name}_elevation"] = elevation
+            orientations[f"{name}_azimuth"] = azimuth
 
-        fingers["index"] = self.angle(
-            landmarks[5],
-            landmarks[6],
-            landmarks[7],
-        )
-
-        fingers["middle"] = self.angle(
-            landmarks[9],
-            landmarks[10],
-            landmarks[11],
-        )
-
-        fingers["ring"] = self.angle(
-            landmarks[13],
-            landmarks[14],
-            landmarks[15],
-        )
-
-        fingers["pinky"] = self.angle(
-            landmarks[17],
-            landmarks[18],
-            landmarks[19],
-        )
-
-        return fingers
+        return orientations
