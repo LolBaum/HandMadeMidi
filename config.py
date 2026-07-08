@@ -1,6 +1,13 @@
 # config.py
 # All adjustable parameters for the hand controller
 
+# ---- Global filter multipliers ----
+# Increase these to make all filters more responsive (less smoothing) or smoother.
+# Values > 1.0 make the filter follow faster (less smoothing).
+# Values < 1.0 make the filter smoother (more lag).
+GLOBAL_CUTOFF_MULTIPLIER = 0.2
+GLOBAL_BETA_MULTIPLIER = 2.0
+
 # ---- One Euro Filter settings ----
 # For each tracked parameter, you can set min_cutoff and beta individually
 FILTER_SETTINGS = {
@@ -29,10 +36,10 @@ NORMALIZATION_RANGES = {
 MIDI_MAP = {
     "hand_pitch": 20,   # e.g., Filter Cutoff
     "hand_roll":  21,   # e.g., Resonance
-    "palm_x":     22,   # e.g., Pan
-    "palm_y":     23,   # e.g., Reverb Mix
-    "palm_z":     24,   # e.g., Volume
-    "hand_yaw":   25,   # (optional)
+    #"palm_x":     22,   # e.g., Pan
+    #"palm_y":     23,   # e.g., Reverb Mix
+    #"palm_z":     24,   # e.g., Volume
+    #"hand_yaw":   25,   # (optional)
 }
 
 # ---- Deadband threshold ----

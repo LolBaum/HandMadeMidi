@@ -15,12 +15,11 @@ features = HandFeatures()
 # --- MIDI ---
 midi_out = MidiOutput(port_name="Motion Controller")
 
-# --- Filters ---
 filters = {}
 for param, settings in config.FILTER_SETTINGS.items():
     filters[param] = OneEuroFilter(
-        min_cutoff=settings["min_cutoff"],
-        beta=settings["beta"]
+        min_cutoff=settings["min_cutoff"] * config.GLOBAL_CUTOFF_MULTIPLIER,
+        beta=settings["beta"] * config.GLOBAL_BETA_MULTIPLIER
     )
 
 # Store last valid smoothed values
