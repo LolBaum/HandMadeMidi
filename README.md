@@ -1,0 +1,2 @@
+- use Mediapipline <= 0.10.30 otherwise mp.solutions is not available
+- use python <= 3.11.9
