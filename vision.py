@@ -2,13 +2,6 @@ import cv2
 import mediapipe as mp
 
 
-print(mp)
-print(mp.__file__)
-print(dir(mp))
-
-import mediapipe as mp
-print("Current Active Version:", mp.__version__)
-
 class Vision:
 
     def __init__(self, camera_index=0):
