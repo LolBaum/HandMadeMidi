@@ -10,41 +10,64 @@ from presets import PRESETS
 import normalize
 import config
 
-# --- Global state for UI ---
-active_preset_idx = 0
-# The mouse callback will update this variable
-def set_active_preset(idx):
-    global active_preset_idx
-    if idx != active_preset_idx:
-        active_preset_idx = idx
-        switch_preset(idx)
+# ----------------------------------------------------------------------
+# Global state for two hands
+# Each hand is identified by index: 0 = left, 1 = right
+# We'll store per‑hand preset index, filters, smoothed values, and MIDI cache.
+hand_preset = [0, 0]          # start with Off for both
+hand_filters = [{}, {}]       # filters for each hand
+hand_smoothed = [{}, {}]      # last smoothed raw values
+hand_last_midi = [{}, {}]     # last MIDI values for deadband
 
-# --- Functions to manage preset switching ---
-filters = {}          # will be re-created per preset
-last_smoothed = {}    # per preset
-last_midi = {}        # per preset
 midi_out = None
 
-def switch_preset(idx):
-    """Re-initialize filters and caches for the new preset."""
-    global filters, last_smoothed, last_midi
-    preset = PRESETS[idx]
+def init_hand(hand_id):
+    """(Re‑)initialize filters and caches for a hand based on its current preset."""
+    preset_idx = hand_preset[hand_id]
+    preset = PRESETS[preset_idx]
     # Create new filter instances for each feature in the preset
-    filters.clear()
+    new_filters = {}
     for feature, settings in preset.filter_settings.items():
-        filters[feature] = OneEuroFilter(
+        new_filters[feature] = OneEuroFilter(
             min_cutoff=settings["min_cutoff"] * config.GLOBAL_CUTOFF_MULTIPLIER,
             beta=settings["beta"] * config.GLOBAL_BETA_MULTIPLIER
         )
-    # Reset smoothed values to None (first update will set them)
-    last_smoothed = {feature: None for feature in preset.filter_settings.keys()}
+    hand_filters[hand_id] = new_filters
+    # Reset smoothed values to None (will be set on first update)
+    hand_smoothed[hand_id] = {feature: None for feature in preset.filter_settings.keys()}
     # Reset MIDI deadband cache
-    last_midi = {feature: -1 for feature in preset.midi_map.keys()}
-    # Optionally send the current (neutral) values? We'll let first frame handle it.
+    hand_last_midi[hand_id] = {feature: -1 for feature in preset.midi_map.keys()}
 
-# --- Main ---
+def switch_preset(hand_id, preset_idx):
+    """Change preset for a specific hand and re‑initialise its state."""
+    if preset_idx < 0 or preset_idx >= len(PRESETS):
+        return
+    hand_preset[hand_id] = preset_idx
+    init_hand(hand_id)
+    # Optionally send current values immediately? We'll let the next frame handle it.
+
+# ----------------------------------------------------------------------
+# UI button handling
+button_rects_left = []   # (x1, y1, x2, y2, preset_idx)
+button_rects_right = []
+
+def mouse_callback(event, x, y, flags, param):
+    if event == cv2.EVENT_LBUTTONDOWN:
+        # Check left hand buttons (upper row)
+        for (x1, y1, x2, y2, idx) in button_rects_left:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                switch_preset(0, idx)
+                return
+        # Check right hand buttons (lower row)
+        for (x1, y1, x2, y2, idx) in button_rects_right:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                switch_preset(1, idx)
+                return
+
+# ----------------------------------------------------------------------
 def main():
-    global active_preset_idx, filters, last_smoothed, last_midi, midi_out
+    global midi_out, hand_preset, hand_filters, hand_smoothed, hand_last_midi
+    global button_rects_left, button_rects_right
 
     # Setup vision
     vision = Vision(camera_index=config.CAMERA_INDEX)
@@ -53,158 +76,192 @@ def main():
     # MIDI output
     midi_out = MidiOutput(port_name=config.MIDI_PORT_NAME)
 
-    # Initialize first preset
-    switch_preset(0)
+    # Initialise both hands with preset 0 (Off)
+    for hand_id in (0, 1):
+        init_hand(hand_id)
 
-    # --- Mouse callback for buttons ---
-    button_rects = []  # will store (x1, y1, x2, y2, preset_index)
-
-    def mouse_callback(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            for (x1, y1, x2, y2, idx) in button_rects:
-                if x1 <= x <= x2 and y1 <= y <= y2:
-                    set_active_preset(idx)
-                    break
-
+    # Set up mouse callback
     cv2.namedWindow("Motion Controller")
     cv2.setMouseCallback("Motion Controller", mouse_callback)
 
-    # --- Main loop ---
+    # Main loop
     while True:
         frame, results = vision.read()
         if frame is None:
             break
 
         h, w = frame.shape[:2]
-        hand_detected = False
-
-        # Reserve bottom 60 pixels for UI
-        ui_height = 60
+        ui_height = 120          # two rows of buttons, each 60px
         frame_ui = frame.copy()
-        # Draw the main content on frame_ui, we'll add buttons at bottom
 
-        # --- Process hand if detected ---
+        # --- Process detected hands ---
+        # Determine which hand is left/right by x-coordinate of wrist (landmark 0)
+        hands = []
         if results and results.multi_hand_landmarks:
-            hand_detected = True
-            hand = results.multi_hand_landmarks[0]
-            vision.drawer.draw_landmarks(
-                frame_ui,
-                hand,
-                vision.mp_hands.HAND_CONNECTIONS,
-            )
+            for hand_landmarks in results.multi_hand_landmarks:
+                wrist_x = hand_landmarks.landmark[0].x
+                hands.append((wrist_x, hand_landmarks))
+            # Sort by x (left to right)
+            hands.sort(key=lambda t: t[0])
+            # The first is left, second is right (if present)
+            left_hand = hands[0][1] if len(hands) > 0 else None
+            right_hand = hands[1][1] if len(hands) > 1 else None
+        else:
+            left_hand = right_hand = None
 
-            landmarks = extractor.get_landmarks(results)
-            if landmarks is None:
-                # If no landmarks, skip (should not happen if hand detected)
-                pass
-            else:
-                # --- Extract features using the active preset ---
-                preset = PRESETS[active_preset_idx]
-                raw_features = preset.features_func(landmarks)  # call the method
+        # Process left hand if present and preset is not Off (index != 0)
+        if left_hand is not None and hand_preset[0] != 0:
+            process_hand(0, left_hand, frame_ui, w, h, vision)
+        else:
+            # If hand not detected or off, we keep last smoothed values (no update)
+            pass
 
-                # --- Update filters and get smoothed values ---
-                for feature, raw_value in raw_features.items():
-                    if feature in filters:
-                        # Update filter and store smoothed
-                        last_smoothed[feature] = filters[feature].update(raw_value)
-                    else:
-                        # If feature is not filtered, keep raw (shouldn't happen)
-                        last_smoothed[feature] = raw_value
+        # Process right hand similarly
+        if right_hand is not None and hand_preset[1] != 0:
+            process_hand(1, right_hand, frame_ui, w, h, vision)
+        else:
+            pass
 
-        # --- Prepare MIDI messages using the active preset ---
-        preset = PRESETS[active_preset_idx]
+        # --- Send MIDI messages (both hands) ---
+        # We'll combine messages from both hands
         messages_to_send = []
-        for feature, (channel, cc) in preset.midi_map.items():
-            if feature in last_smoothed and last_smoothed[feature] is not None:
-                raw = last_smoothed[feature]
-                # Normalize using the preset's ranges
-                norm_range = preset.norm_ranges.get(feature)
-                if norm_range is None:
-                    continue
-                norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
-                midi_val = normalize.midi_value(norm)
-                # Deadband check (per preset)
-                if abs(midi_val - last_midi[feature]) > preset.deadband * 127:
-                    messages_to_send.append((channel, cc, midi_val))
-                    last_midi[feature] = midi_val
+        for hand_id in (0, 1):
+            preset_idx = hand_preset[hand_id]
+            if preset_idx == 0:
+                continue
+            preset = PRESETS[preset_idx]
+            for feature, (channel, cc) in preset.midi_map.items():
+                if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
+                    raw = hand_smoothed[hand_id][feature]
+                    norm_range = preset.norm_ranges.get(feature)
+                    if norm_range is None:
+                        continue
+                    norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
+                    midi_val = normalize.midi_value(norm)
+                    if abs(midi_val - hand_last_midi[hand_id].get(feature, -1)) > preset.deadband * 127:
+                        messages_to_send.append((channel, cc, midi_val))
+                        hand_last_midi[hand_id][feature] = midi_val
 
-        # Send MIDI
         if messages_to_send:
             midi_out.send_messages(messages_to_send)
 
-        # --- Draw UI buttons at the bottom ---
-        button_rects.clear()
+        # --- Draw UI: two rows of preset buttons ---
+        button_rects_left.clear()
+        button_rects_right.clear()
         num_presets = len(PRESETS)
-        button_width = w // num_presets
-        y_start = h - ui_height
-        for i, p in enumerate(PRESETS):
-            x1 = i * button_width
-            x2 = (i + 1) * button_width
-            y1 = y_start
-            y2 = h
-            # Highlight active preset
-            color = (0, 255, 0) if i == active_preset_idx else (100, 100, 100)
-            cv2.rectangle(frame_ui, (x1, y1), (x2, y2), color, -1)
-            cv2.rectangle(frame_ui, (x1, y1), (x2, y2), (0, 0, 0), 2)
-            # Text centered
-            text = f"{i+1}: {p.name}"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            (tw, th), _ = cv2.getTextSize(text, font, 0.6, 1)
-            tx = x1 + (button_width - tw) // 2
-            ty = y1 + (ui_height + th) // 2 - 5
-            cv2.putText(frame_ui, text, (tx, ty), font, 0.6, (0, 0, 0), 1)
-            button_rects.append((x1, y1, x2, y2, i))
+        # We'll use 2/3 of the width for buttons, and show labels on the left
+        button_width = (w - 40) // num_presets  # 20px margin on each side
 
-        # --- Display info on screen (features, active preset name) ---
-        # Show active preset name top-left
-        cv2.putText(frame_ui, f"Active: {PRESETS[active_preset_idx].name}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        # Left hand row (y from h - ui_height to h - ui_height//2)
+        row_y1 = h - ui_height
+        row_y2 = h - ui_height//2
+        draw_button_row(frame_ui, 0, row_y1, row_y2, button_width, num_presets, "L")
+        # Right hand row (y from h - ui_height//2 to h)
+        row_y1 = h - ui_height//2
+        row_y2 = h
+        draw_button_row(frame_ui, 1, row_y1, row_y2, button_width, num_presets, "R")
 
-        # Show raw and MIDI values for mapped features (optional)
-        y_pos = 60
-        for feature in preset.midi_map.keys():
-            if feature in last_smoothed and last_smoothed[feature] is not None:
-                raw = last_smoothed[feature]
-                norm_range = preset.norm_ranges.get(feature)
-                if norm_range:
-                    norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
-                    midi = normalize.midi_value(norm)
-                else:
-                    norm = 0.0
-                    midi = 0
-                text = f"{feature}: raw={raw:.2f}  norm={norm:.2f}  midi={midi}"
-                cv2.putText(frame_ui, text, (10, y_pos),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                y_pos += 22
+        # Draw status text
+        cv2.putText(frame_ui, f"Left: {PRESETS[hand_preset[0]].name}", (10, h - ui_height - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+        cv2.putText(frame_ui, f"Right: {PRESETS[hand_preset[1]].name}", (10, h - ui_height//2 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
 
-        # Status messages
-        if not hand_detected:
-            cv2.putText(frame_ui, "NO HAND - holding last values", (20, h - ui_height - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        # Show shortcut hints
+        cv2.putText(frame_ui, "Keys 1-9: change LEFT preset | Shift+1-9: change RIGHT preset",
+                    (w - 400, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
+        # Show MIDI status
         midi_status = "MIDI: Active" if midi_out.port else "MIDI: Not connected"
         cv2.putText(frame_ui, midi_status, (w - 200, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
-        # Show shortcut keys hint
-        cv2.putText(frame_ui, "Press 1-9 to switch presets", (w - 250, h - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-
         cv2.imshow("Motion Controller", frame_ui)
 
-        # --- Keyboard input ---
+        # --- Keyboard handling ---
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC
             break
-        elif 49 <= key <= 57:  # '1' to '9'
-            idx = key - 49  # 0-based
+        # Check for number keys (1-9) without shift -> left hand
+        if 49 <= key <= 57:  # '1' to '9'
+            idx = key - 48  # 1-based index
             if idx < len(PRESETS):
-                set_active_preset(idx)
+                switch_preset(0, idx)
+        # Check for shift+number (symbols) -> right hand
+        # Map symbols: '!'=33, '@'=64, '#'=35, '$'=36, '%'=37, '^'=94, '&'=38, '*'=42, '('=40
+        shift_map = {33:1, 64:2, 35:3, 36:4, 37:5, 94:6, 38:7, 42:8, 40:9}
+        if key in shift_map:
+            idx = shift_map[key]
+            if idx < len(PRESETS):
+                switch_preset(1, idx)
 
     # Cleanup
     vision.release()
     midi_out.close()
     cv2.destroyAllWindows()
 
+# ----------------------------------------------------------------------
+def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
+    """Extract features, update filters, draw landmarks and palm points."""
+    preset_idx = hand_preset[hand_id]
+    if preset_idx == 0:
+        return
+    preset = PRESETS[preset_idx]
+
+    # Draw hand skeleton
+    vision.drawer.draw_landmarks(
+        frame,
+        hand_landmarks,
+        vision.mp_hands.HAND_CONNECTIONS,
+    )
+
+    # Get landmarks as list of tuples
+    landmarks = []
+    for lm in hand_landmarks.landmark:
+        landmarks.append((lm.x, lm.y, lm.z))
+
+    # Extract features using the preset's method
+    raw_features = preset.features_func(landmarks)  # returns dict
+
+    # Update filters for each feature
+    for feature, raw_value in raw_features.items():
+        if feature in hand_filters[hand_id]:
+            # Update filter and store smoothed value
+            hand_smoothed[hand_id][feature] = hand_filters[hand_id][feature].update(raw_value)
+        else:
+            # If not filtered, just store raw (should not happen if preset defines filter_settings)
+            hand_smoothed[hand_id][feature] = raw_value
+
+    # Optionally draw palm points (e.g., for debugging)
+    # (you can add visualization code here if needed)
+
+# ----------------------------------------------------------------------
+def draw_button_row(frame, hand_id, y1, y2, button_width, num_presets, label):
+    """Draw a row of preset buttons for a specific hand (left=0, right=1)."""
+    rects = []
+    x_start = 20  # left margin
+    for i in range(num_presets):
+        x1 = x_start + i * button_width
+        x2 = x1 + button_width
+        # Highlight if this is the active preset for that hand
+        color = (0, 255, 0) if hand_preset[hand_id] == i else (100, 100, 100)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 2)
+        # Text: preset name (shortened)
+        text = f"{i}: {PRESETS[i].name}"
+        if len(text) > 12:
+            text = text[:10] + ".."
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (tw, th), _ = cv2.getTextSize(text, font, 0.5, 1)
+        tx = x1 + (button_width - tw) // 2
+        ty = y1 + (y2 - y1 + th) // 2 - 3
+        cv2.putText(frame, text, (tx, ty), font, 0.5, (0, 0, 0), 1)
+        # Store rectangle for mouse callback
+        if hand_id == 0:
+            button_rects_left.append((x1, y1, x2, y2, i))
+        else:
+            button_rects_right.append((x1, y1, x2, y2, i))
+
+# ----------------------------------------------------------------------
 if __name__ == "__main__":
     main()
