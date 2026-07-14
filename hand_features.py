@@ -42,12 +42,29 @@ class HandFeatures:
         }
 
     @staticmethod
+    @staticmethod
     def finger_spread(landmarks):
-        """Returns distance between thumb tip (4) and index tip (8)."""
+        """
+        Returns a normalised distance between thumb tip and index tip,
+        divided by the hand's scale (distance from wrist to middle MCP).
+        This makes the measurement robust to changes in camera distance.
+        """
+        wrist = np.array(landmarks[0])
         thumb_tip = np.array(landmarks[4])
         index_tip = np.array(landmarks[8])
-        dist = np.linalg.norm(thumb_tip - index_tip)
-        return {"thumb_index_dist": dist}
+        middle_mcp = np.array(landmarks[9])  # middle MCP
+
+        # Hand scale: distance from wrist to middle MCP
+        hand_scale = np.linalg.norm(middle_mcp - wrist)
+        # Avoid division by zero
+        if hand_scale < 1e-6:
+            return {"thumb_index_dist": 0.0}
+
+        # Raw distance between thumb tip and index tip
+        raw_dist = np.linalg.norm(thumb_tip - index_tip)
+        # Normalise by hand scale
+        norm_dist = raw_dist / hand_scale
+        return {"thumb_index_dist": norm_dist}
 
     @staticmethod
     def hand_fist(landmarks):

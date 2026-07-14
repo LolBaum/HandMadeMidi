@@ -48,17 +48,16 @@ PRESETS = [
         mirror_left_hand=False,   # do NOT mirror – keep absolute position
     ),
 
-    # 3: Finger Spread (mirror enabled – symmetry is fine)
+    # Preset 3: Finger Spread (normalised)
     make_preset(
         name="Finger Spread",
         method_name="finger_spread",
         midi_map={"thumb_index_dist": (3, 30)},
-        norm_ranges={"thumb_index_dist": {"min": 0.0, "max": 0.3}},
+        norm_ranges={"thumb_index_dist": {"min": 0.2, "max": 1.2}},
         filter_settings={"thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
         deadband=0.01,
         mirror_left_hand=True,
     ),
-
     # 4: Fist (mirror enabled)
     make_preset(
         name="Fist",
