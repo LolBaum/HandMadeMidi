@@ -41,6 +41,7 @@ def switch_preset(hand_id, preset_idx):
     hand_preset[hand_id] = preset_idx
     init_hand(hand_id)
 
+# ----------------------------------------------------------------------
 def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
     """Extract features, update filters, draw hand skeleton."""
     preset_idx = hand_preset[hand_id]
@@ -61,8 +62,6 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
         landmarks.append((lm.x, lm.y, lm.z))
 
     # --- Mirror landmarks for the left hand (symmetry) ---
-    # Reflect across the vertical axis (x → 1 - x) so the left hand behaves like a right hand.
-    # This ensures yaw, roll, and position all have the same directional sense.
     if hand_id == 0:  # left hand
         landmarks = [(1.0 - x, y, z) for (x, y, z) in landmarks]
 
@@ -107,18 +106,28 @@ def main():
 
         h, w = frame.shape[:2]
 
-        midi_status =  "MIDI: Active" if midi_out.port else "MIDI: Not connected"
-
-        # --- Process hands and draw landmarks on the original frame ---
-        # Determine left/right hands based on wrist x-coordinate
-        hands = []
+        # --- Determine left/right hands using MediaPipe handedness ---
+        left_hand = None
+        right_hand = None
         if results and results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                wrist_x = hand_landmarks.landmark[0].x
-                hands.append((wrist_x, hand_landmarks))
-            hands.sort(key=lambda t: t[0])  # left to right
-            left_hand = hands[0][1] if len(hands) > 0 else None
-            right_hand = hands[1][1] if len(hands) > 1 else None
+            if results.multi_handedness:
+                for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                    handedness = results.multi_handedness[idx].classification[0].label
+                    if handedness == 'Left':
+                        left_hand = hand_landmarks
+                    else:  # 'Right'
+                        right_hand = hand_landmarks
+            else:
+                # Fallback: sort by wrist x (leftmost = left, rightmost = right)
+                hands = []
+                for hand_landmarks in results.multi_hand_landmarks:
+                    wrist_x = hand_landmarks.landmark[0].x
+                    hands.append((wrist_x, hand_landmarks))
+                hands.sort(key=lambda t: t[0])
+                if len(hands) > 0:
+                    left_hand = hands[0][1]
+                if len(hands) > 1:
+                    right_hand = hands[1][1]
         else:
             left_hand = right_hand = None
 
@@ -137,8 +146,10 @@ def main():
         # Place the camera frame (with drawings) in top-left corner
         canvas[0:h, 0:w] = frame
 
-        # Draw right panel (values)
-        ui.draw_right_panel(canvas, w, 0, ui.RIGHT_PANEL_WIDTH, h, hand_preset, hand_smoothed, midi_status=midi_status)
+        # Draw right panel (values) – includes MIDI status
+        midi_status = "MIDI: Active" if midi_out.port else "MIDI: Not connected"
+        ui.draw_right_panel(canvas, w, 0, ui.RIGHT_PANEL_WIDTH, h,
+                            hand_preset, hand_smoothed, midi_status)
 
         # Draw bottom panel (buttons)
         ui.draw_bottom_panel(canvas, 0, h, canvas_w, ui.BOTTOM_PANEL_HEIGHT, hand_preset)
@@ -165,8 +176,7 @@ def main():
         if messages_to_send:
             midi_out.send_messages(messages_to_send)
 
-        # --- Add status and shortcut hints on canvas ---
-        midi_status =  "MIDI: Active" if midi_out.port else "MIDI: Not connected"
+        # --- Add shortcut hints ---
         cv2.putText(canvas, "0-9: change LEFT preset | Shift+0-9: change RIGHT preset",
                     (10, canvas_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
@@ -179,14 +189,13 @@ def main():
 
         # Left hand: number keys 0-9
         if 48 <= key <= 57:  # '0' to '9'
-            idx = key - 48   # 0-9
+            idx = key - 48
             if idx < len(PRESETS):
                 switch_preset(0, idx)
 
         # Right hand: Shift+number (symbols)
-        # Map shifted symbols for common layouts
         shift_map = {
-            # US layout (Shift+1..9,0)
+            # US layout
             33: 1,  # !
             64: 2,  # @
             35: 3,  # #
@@ -196,13 +205,12 @@ def main():
             38: 7,  # &
             42: 8,  # *
             40: 9,  # (
-            41: 0,  # )   <- Shift+0 on US
-            # German layout (Shift+1..9,0)
+            41: 0,  # )
+            # German layout
             34: 2,  # "
             167: 3, # §
             47: 7,  # /
-            41: 0,  # )   also used on some layouts
-            61: 0,  # =   Shift+0 on German
+            61: 0,  # =
         }
         if key in shift_map:
             idx = shift_map[key]
