@@ -41,7 +41,6 @@ def switch_preset(hand_id, preset_idx):
     hand_preset[hand_id] = preset_idx
     init_hand(hand_id)
 
-# ----------------------------------------------------------------------
 def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
     """Extract features, update filters, draw hand skeleton."""
     preset_idx = hand_preset[hand_id]
@@ -56,10 +55,16 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
         vision.mp_hands.HAND_CONNECTIONS,
     )
 
-    # Get landmarks as list of tuples
+    # Get landmarks as list of (x, y, z) tuples
     landmarks = []
     for lm in hand_landmarks.landmark:
         landmarks.append((lm.x, lm.y, lm.z))
+
+    # --- Mirror landmarks for the left hand (symmetry) ---
+    # Reflect across the vertical axis (x → 1 - x) so the left hand behaves like a right hand.
+    # This ensures yaw, roll, and position all have the same directional sense.
+    if hand_id == 0:  # left hand
+        landmarks = [(1.0 - x, y, z) for (x, y, z) in landmarks]
 
     # Extract features using the preset's method
     raw_features = preset.features_func(landmarks)
