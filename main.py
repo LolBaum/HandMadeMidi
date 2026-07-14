@@ -102,6 +102,8 @@ def main():
 
         h, w = frame.shape[:2]
 
+        midi_status =  "MIDI: Active" if midi_out.port else "MIDI: Not connected"
+
         # --- Process hands and draw landmarks on the original frame ---
         # Determine left/right hands based on wrist x-coordinate
         hands = []
@@ -131,7 +133,7 @@ def main():
         canvas[0:h, 0:w] = frame
 
         # Draw right panel (values)
-        ui.draw_right_panel(canvas, w, 0, ui.RIGHT_PANEL_WIDTH, h, hand_preset, hand_smoothed)
+        ui.draw_right_panel(canvas, w, 0, ui.RIGHT_PANEL_WIDTH, h, hand_preset, hand_smoothed, midi_status=midi_status)
 
         # Draw bottom panel (buttons)
         ui.draw_bottom_panel(canvas, 0, h, canvas_w, ui.BOTTOM_PANEL_HEIGHT, hand_preset)
@@ -159,8 +161,7 @@ def main():
             midi_out.send_messages(messages_to_send)
 
         # --- Add status and shortcut hints on canvas ---
-        cv2.putText(canvas, "MIDI: Active" if midi_out.port else "MIDI: Not connected",
-                    (w + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        midi_status =  "MIDI: Active" if midi_out.port else "MIDI: Not connected"
         cv2.putText(canvas, "0-9: change LEFT preset | Shift+0-9: change RIGHT preset",
                     (10, canvas_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
