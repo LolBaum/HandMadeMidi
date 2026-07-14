@@ -203,14 +203,30 @@ def main():
         h, w = frame.shape[:2]
 
         # --- Detect hands and get their labels ---
-        detected_hands = []  # list of (label, hand_landmarks)
+        detected_hands = []
+        conflict = False
         if results and results.multi_hand_landmarks:
             if results.multi_handedness:
-                for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                    label = results.multi_handedness[idx].classification[0].label
-                    detected_hands.append((label, hand_landmarks))
+                labels = [results.multi_handedness[i].classification[0].label
+                          for i in range(len(results.multi_hand_landmarks))]
+                if len(labels) == 2 and labels[0] == labels[1]:
+                    conflict = True
+                    print(f"⚠️ Handedness conflict: both detected as {labels[0]}. Falling back to spatial sorting.")
+                    hands_with_x = []
+                    for hand_landmarks in results.multi_hand_landmarks:
+                        wrist_x = hand_landmarks.landmark[0].x
+                        hands_with_x.append((wrist_x, hand_landmarks))
+                    hands_with_x.sort(key=lambda t: t[0])
+                    if len(hands_with_x) > 0:
+                        detected_hands.append(('Left', hands_with_x[0][1]))
+                    if len(hands_with_x) > 1:
+                        detected_hands.append(('Right', hands_with_x[1][1]))
+                else:
+                    for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                        label = results.multi_handedness[idx].classification[0].label
+                        detected_hands.append((label, hand_landmarks))
             else:
-                # fallback: sort by wrist x (leftmost = left, rightmost = right)
+                # No handedness data – fallback to spatial
                 hands = []
                 for hand_landmarks in results.multi_hand_landmarks:
                     wrist_x = hand_landmarks.landmark[0].x
@@ -220,13 +236,15 @@ def main():
                     detected_hands.append(('Left', hands[0][1]))
                 if len(hands) > 1:
                     detected_hands.append(('Right', hands[1][1]))
+        else:
+            # No hands detected
+            pass
 
         # --- Update tracker with positions ---
         detected_positions = [(label, lm.landmark[0].x, lm.landmark[0].y) for label, lm in detected_hands]
         stable_hands = update_hand_tracks(detected_positions)
 
         # --- Assign each detected hand to a stable label and process ---
-        # We match each detection to the closest stable track by position.
         processed_ids = set()
         for label, lm in detected_hands:
             wrist = lm.landmark[0]
@@ -235,7 +253,7 @@ def main():
             for s_label, sx, sy in stable_hands:
                 dx = sx - wrist.x
                 dy = sy - wrist.y
-                dist = dx*dx + dy*dy
+                dist = dx * dx + dy * dy
                 if dist < best_dist:
                     best_dist = dist
                     best_stable_label = s_label
@@ -245,6 +263,14 @@ def main():
                 if hand_id not in processed_ids:
                     process_hand(hand_id, lm, frame, w, h, vision)
                     processed_ids.add(hand_id)
+
+        # Debug: check for missing hands
+        if len(processed_ids) < 2:
+            expected = {0, 1}
+            missing = expected - processed_ids
+            for hand_id in missing:
+                if hand_preset[hand_id] != 0:
+                    print(f"⚠️ Hand {hand_id} ({'Left' if hand_id == 0 else 'Right'}) not processed this frame.")
 
         # --- Build the combined canvas ---
         canvas_h = h + ui.BOTTOM_PANEL_HEIGHT
