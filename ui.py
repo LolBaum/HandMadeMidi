@@ -68,7 +68,7 @@ def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
                     continue
                 norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
                 midi_val = normalize.midi_value(norm)
-                text = f"{feature}: {raw:.2f} → {norm:.2f} → {midi_val}"
+                text = f"{feature}: {raw:.2f} -> {midi_val}"
                 cv2.putText(canvas, text, (x_offset + 10, y_pos),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                 y_pos += 20
@@ -100,7 +100,7 @@ def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
                     continue
                 norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
                 midi_val = normalize.midi_value(norm)
-                text = f"{feature}: {raw:.2f} → {norm:.2f} → {midi_val}"
+                text = f"{feature}: {raw:.2f} -> {midi_val}"
                 cv2.putText(canvas, text, (x_offset + 10, y_pos),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                 y_pos += 20
