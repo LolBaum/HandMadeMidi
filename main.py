@@ -296,7 +296,11 @@ def main():
             if preset_idx == 0:
                 continue
             preset = PRESETS[preset_idx]
-            for feature, (channel, cc) in preset.midi_map.items():
+
+            # Determine channel offset for this hand
+            hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+
+            for feature, (base_channel, cc) in preset.midi_map.items():
                 if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
                     raw = hand_smoothed[hand_id][feature]
                     norm_range = preset.norm_ranges.get(feature)
@@ -305,7 +309,9 @@ def main():
                     norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
                     midi_val = normalize.midi_value(norm)
                     if abs(midi_val - hand_last_midi[hand_id].get(feature, -1)) > preset.deadband * 127:
-                        messages_to_send.append((channel, cc, midi_val))
+                        # Calculate actual MIDI channel (0-15)
+                        actual_channel = min(15, max(0, base_channel + hand_offset))
+                        messages_to_send.append((actual_channel, cc, midi_val))
                         hand_last_midi[hand_id][feature] = midi_val
 
         if messages_to_send:
