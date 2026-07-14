@@ -43,32 +43,61 @@ def switch_preset(hand_id, preset_idx):
 
 # ----------------------------------------------------------------------
 def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
-    """Extract features, update filters, draw hand skeleton."""
+    """Extract features, update filters, draw hand skeleton with color."""
     preset_idx = hand_preset[hand_id]
     if preset_idx == 0:
         return
     preset = PRESETS[preset_idx]
 
-    # Draw hand skeleton on the camera frame
-    vision.drawer.draw_landmarks(
-        frame,
-        hand_landmarks,
-        vision.mp_hands.HAND_CONNECTIONS,
-    )
+    # ---- Draw hand skeleton ----
+    if hand_id == 0:  # left hand → light blue
+        # Define custom drawing specs
+        connection_spec = vision.drawer.DrawingSpec(
+            color=(255, 200, 150),   # light blue (BGR)
+            thickness=2,
+            circle_radius=2
+        )
+        landmark_spec = vision.drawer.DrawingSpec(
+            color=(255, 200, 150),
+            thickness=2,
+            circle_radius=2
+        )
+        vision.drawer.draw_landmarks(
+            frame,
+            hand_landmarks,
+            vision.mp_hands.HAND_CONNECTIONS,
+            connection_drawing_spec=connection_spec,
+            landmark_drawing_spec=landmark_spec
+        )
+        # Add a label
+        wrist = hand_landmarks.landmark[0]
+        x, y = int(wrist.x * w), int(wrist.y * h)
+        cv2.putText(frame, "Left", (x - 20, y - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 150), 2)
+    else:  # right hand → default MediaPipe colors
+        vision.drawer.draw_landmarks(
+            frame,
+            hand_landmarks,
+            vision.mp_hands.HAND_CONNECTIONS,
+        )
+        # Add a label
+        wrist = hand_landmarks.landmark[0]
+        x, y = int(wrist.x * w), int(wrist.y * h)
+        cv2.putText(frame, "Right", (x - 20, y - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    # Get landmarks as list of (x, y, z) tuples
+    # ---- Get landmarks and mirror for left hand ----
     landmarks = []
     for lm in hand_landmarks.landmark:
         landmarks.append((lm.x, lm.y, lm.z))
 
-    # --- Mirror landmarks for the left hand (symmetry) ---
-    if hand_id == 0:  # left hand
+    if hand_id == 0:  # left hand → mirror x
         landmarks = [(1.0 - x, y, z) for (x, y, z) in landmarks]
 
-    # Extract features using the preset's method
+    # ---- Feature extraction ----
     raw_features = preset.features_func(landmarks)
 
-    # Update filters for each feature
+    # Update filters
     for feature, raw_value in raw_features.items():
         if feature in hand_filters[hand_id]:
             hand_smoothed[hand_id][feature] = hand_filters[hand_id][feature].update(raw_value)
