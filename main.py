@@ -20,6 +20,75 @@ hand_last_midi = [{}, {}]     # last MIDI values for deadband
 
 midi_out = None
 
+# --- Hand tracking state ---
+hand_tracks = []          # list of dicts: {id, label, position, counter, age}
+next_track_id = 0
+MAX_AGE = 20              # frames before a track is removed
+STABILITY_THRESHOLD = 10   # frames before switching label
+
+def update_hand_tracks(detected):
+    """
+    detected: list of (label, wx, wy)
+    Returns a dict mapping track_id -> label (or list of (label, wx, wy) for stable positions)
+    """
+    global hand_tracks, next_track_id
+
+    # Step 1: Match detected hands to existing tracks
+    matched_indices = set()
+    unmatched = []
+
+    for label, wx, wy in detected:
+        best_idx = -1
+        best_dist = float('inf')
+        for i, track in enumerate(hand_tracks):
+            if i in matched_indices:
+                continue
+            dx = wx - track['position'][0]
+            dy = wy - track['position'][1]
+            dist = dx*dx + dy*dy
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+
+        if best_idx != -1 and best_dist < 0.02:  # threshold ~2% of screen
+            # Match found
+            track = hand_tracks[best_idx]
+            matched_indices.add(best_idx)
+            track['position'] = (wx, wy)
+            # Label stability
+            if track['label'] == label:
+                track['counter'] = 0
+            else:
+                track['counter'] += 1
+                if track['counter'] >= STABILITY_THRESHOLD:
+                    track['label'] = label
+                    track['counter'] = 0
+            track['age'] = 0
+        else:
+            # No match → new track
+            unmatched.append((label, wx, wy))
+
+    # Step 2: Create new tracks for unmatched detections
+    for label, wx, wy in unmatched:
+        new_track = {
+            'id': next_track_id,
+            'label': label,
+            'position': (wx, wy),
+            'counter': 0,
+            'age': 0
+        }
+        hand_tracks.append(new_track)
+        next_track_id += 1
+
+    # Step 3: Increment age and remove old tracks
+    hand_tracks = [t for t in hand_tracks if t['age'] < MAX_AGE]
+    for t in hand_tracks:
+        t['age'] += 1
+
+    # Step 4: Return stable labels and positions
+    return [(t['label'], t['position'][0], t['position'][1]) for t in hand_tracks]
+
+# ----------------------------------------------------------------------
 def init_hand(hand_id):
     """(Re‑)initialize filters and caches for a hand based on its current preset."""
     preset_idx = hand_preset[hand_id]
@@ -51,7 +120,6 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
 
     # ---- Draw hand skeleton ----
     if hand_id == 0:  # left hand → light blue
-        # Define custom drawing specs
         connection_spec = vision.drawer.DrawingSpec(
             color=(255, 200, 150),   # light blue (BGR)
             thickness=2,
@@ -69,7 +137,6 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
             connection_drawing_spec=connection_spec,
             landmark_drawing_spec=landmark_spec
         )
-        # Add a label
         wrist = hand_landmarks.landmark[0]
         x, y = int(wrist.x * w), int(wrist.y * h)
         cv2.putText(frame, "Left", (x - 20, y - 20),
@@ -80,7 +147,6 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
             hand_landmarks,
             vision.mp_hands.HAND_CONNECTIONS,
         )
-        # Add a label
         wrist = hand_landmarks.landmark[0]
         x, y = int(wrist.x * w), int(wrist.y * h)
         cv2.putText(frame, "Right", (x - 20, y - 20),
@@ -107,6 +173,7 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
 # ----------------------------------------------------------------------
 def main():
     global midi_out, hand_preset, hand_filters, hand_smoothed, hand_last_midi
+    global hand_tracks, next_track_id
 
     # Setup vision
     vision = Vision(camera_index=config.CAMERA_INDEX)
@@ -135,37 +202,49 @@ def main():
 
         h, w = frame.shape[:2]
 
-        # --- Determine left/right hands using MediaPipe handedness ---
-        left_hand = None
-        right_hand = None
+        # --- Detect hands and get their labels ---
+        detected_hands = []  # list of (label, hand_landmarks)
         if results and results.multi_hand_landmarks:
             if results.multi_handedness:
                 for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                    handedness = results.multi_handedness[idx].classification[0].label
-                    if handedness == 'Left':
-                        left_hand = hand_landmarks
-                    else:  # 'Right'
-                        right_hand = hand_landmarks
+                    label = results.multi_handedness[idx].classification[0].label
+                    detected_hands.append((label, hand_landmarks))
             else:
-                # Fallback: sort by wrist x (leftmost = left, rightmost = right)
+                # fallback: sort by wrist x (leftmost = left, rightmost = right)
                 hands = []
                 for hand_landmarks in results.multi_hand_landmarks:
                     wrist_x = hand_landmarks.landmark[0].x
                     hands.append((wrist_x, hand_landmarks))
                 hands.sort(key=lambda t: t[0])
                 if len(hands) > 0:
-                    left_hand = hands[0][1]
+                    detected_hands.append(('Left', hands[0][1]))
                 if len(hands) > 1:
-                    right_hand = hands[1][1]
-        else:
-            left_hand = right_hand = None
+                    detected_hands.append(('Right', hands[1][1]))
 
-        # Process left hand
-        if left_hand is not None and hand_preset[0] != 0:
-            process_hand(0, left_hand, frame, w, h, vision)
-        # Process right hand
-        if right_hand is not None and hand_preset[1] != 0:
-            process_hand(1, right_hand, frame, w, h, vision)
+        # --- Update tracker with positions ---
+        detected_positions = [(label, lm.landmark[0].x, lm.landmark[0].y) for label, lm in detected_hands]
+        stable_hands = update_hand_tracks(detected_positions)
+
+        # --- Assign each detected hand to a stable label and process ---
+        # We match each detection to the closest stable track by position.
+        processed_ids = set()
+        for label, lm in detected_hands:
+            wrist = lm.landmark[0]
+            best_stable_label = None
+            best_dist = float('inf')
+            for s_label, sx, sy in stable_hands:
+                dx = sx - wrist.x
+                dy = sy - wrist.y
+                dist = dx*dx + dy*dy
+                if dist < best_dist:
+                    best_dist = dist
+                    best_stable_label = s_label
+
+            if best_stable_label is not None and best_dist < 0.02:
+                hand_id = 0 if best_stable_label == 'Left' else 1
+                if hand_id not in processed_ids:
+                    process_hand(hand_id, lm, frame, w, h, vision)
+                    processed_ids.add(hand_id)
 
         # --- Build the combined canvas ---
         canvas_h = h + ui.BOTTOM_PANEL_HEIGHT
