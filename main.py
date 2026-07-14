@@ -152,12 +152,13 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
         cv2.putText(frame, "Right", (x - 20, y - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    # ---- Get landmarks and mirror for left hand ----
+    # ---- Get landmarks ----
     landmarks = []
     for lm in hand_landmarks.landmark:
         landmarks.append((lm.x, lm.y, lm.z))
 
-    if hand_id == 0:  # left hand → mirror x
+    # ---- Mirror left hand only if the preset allows it ----
+    if hand_id == 0 and preset.mirror_left_hand:
         landmarks = [(1.0 - x, y, z) for (x, y, z) in landmarks]
 
     # ---- Feature extraction ----
