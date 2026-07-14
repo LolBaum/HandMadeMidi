@@ -10,7 +10,7 @@ class Preset:
         self.norm_ranges = norm_ranges
         self.filter_settings = filter_settings
         self.deadband = deadband
-        self.mirror_left_hand = mirror_left_hand   # <-- new flag
+        self.mirror_left_hand = mirror_left_hand
 
 def make_preset(name, method_name, midi_map, norm_ranges, filter_settings,
                 deadband=0.01, mirror_left_hand=True):
@@ -22,7 +22,7 @@ PRESETS = [
     # 0: Off
     Preset("Off", lambda lm: {}, {}, {}, {}, deadband=0.01, mirror_left_hand=False),
 
-    # 1: Pitch/Roll (mirror enabled)
+    # 1: Pitch/Roll
     make_preset(
         name="Pitch/Roll",
         method_name="hand_orientation",
@@ -32,10 +32,10 @@ PRESETS = [
         filter_settings={"hand_pitch": {"min_cutoff": 0.5, "beta": 0.2},
                          "hand_roll": {"min_cutoff": 0.5, "beta": 0.2}},
         deadband=0.01,
-        mirror_left_hand=True,   # mirror for symmetry
+        mirror_left_hand=True,
     ),
 
-    # 2: Position (mirror disabled – absolute screen position)
+    # 2: Position
     make_preset(
         name="Position",
         method_name="palm_position",
@@ -45,20 +45,21 @@ PRESETS = [
         filter_settings={"palm_x": {"min_cutoff": 0.3, "beta": 0.1},
                          "palm_y": {"min_cutoff": 0.3, "beta": 0.1}},
         deadband=0.015,
-        mirror_left_hand=False,   # do NOT mirror – keep absolute position
+        mirror_left_hand=False,
     ),
 
-    # Preset 3: Finger Spread (normalised)
+    # 3: Finger Spread (normalised)
     make_preset(
         name="Finger Spread",
         method_name="finger_spread",
         midi_map={"thumb_index_dist": (3, 30)},
-        norm_ranges={"thumb_index_dist": {"min": 0.2, "max": 1.2}},
+        norm_ranges={"thumb_index_dist": {"min": 0.0, "max": 1.2}},
         filter_settings={"thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
         deadband=0.01,
         mirror_left_hand=True,
     ),
-    # 4: Fist (mirror enabled)
+
+    # 4: Fist
     make_preset(
         name="Fist",
         method_name="hand_fist",
@@ -67,5 +68,28 @@ PRESETS = [
         filter_settings={"fist": {"min_cutoff": 0.3, "beta": 0.1}},
         deadband=0.01,
         mirror_left_hand=True,
+    ),
+
+    # 5: Position + Spread (combined)
+    make_preset(
+        name="Pos+Spread",
+        method_name="position_and_spread",
+        midi_map={
+            "palm_x": (2, 22),
+            "palm_y": (2, 23),
+            "thumb_index_dist": (3, 30)
+        },
+        norm_ranges={
+            "palm_x": {"min": 0.2, "max": 0.8},
+            "palm_y": {"min": 0.2, "max": 0.8},
+            "thumb_index_dist": {"min": 0.2, "max": 1.2}
+        },
+        filter_settings={
+            "palm_x": {"min_cutoff": 0.3, "beta": 0.1},
+            "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
+            "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}
+        },
+        deadband=0.015,
+        mirror_left_hand=False,   # position should be absolute; spread is symmetric anyway
     ),
 ]

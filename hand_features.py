@@ -95,3 +95,10 @@ class HandFeatures:
             total_curl += curl
         fist_value = total_curl / 4.0
         return {"fist": fist_value}
+
+    @staticmethod
+    def position_and_spread(landmarks):
+        """Returns palm_x, palm_y and thumb_index_dist in one dict."""
+        pos = HandFeatures.palm_position(landmarks)
+        spread = HandFeatures.finger_spread(landmarks)
+        return {**pos, **spread}
