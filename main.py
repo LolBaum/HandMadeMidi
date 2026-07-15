@@ -26,7 +26,7 @@ next_track_id = 0
 MAX_AGE = 20              # frames before a track is removed
 STABILITY_THRESHOLD = 10   # frames before switching label
 
-# --- Mapper mode toggle ---
+# Mapper mode
 mapper_mode = False
 
 # ----------------------------------------------------------------------
@@ -191,17 +191,19 @@ def main():
     for hand_id in (0, 1):
         init_hand(hand_id)
 
-    # Set up mouse callback with parameters (now including mapper mode)
+    window_name = "Motion Controller"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 1280, 720)
+
     callback_params = {
         'hand_preset': hand_preset,
         'hand_smoothed': hand_smoothed,
         'midi_out': midi_out,
-        'mapper_mode': lambda: mapper_mode,   # pass as callable to get current value
+        'mapper_mode': lambda: mapper_mode,
         'switch_preset': switch_preset,
-        'window_name': "Motion Controller"
+        'window_name': window_name
     }
-    cv2.namedWindow("Motion Controller")
-    cv2.setMouseCallback("Motion Controller", ui.mouse_callback, param=callback_params)
+    cv2.setMouseCallback(window_name, ui.mouse_callback, param=callback_params)
 
     # Main loop
     while True:
@@ -211,16 +213,14 @@ def main():
 
         h, w = frame.shape[:2]
 
-        # --- Detect hands and get their labels (unchanged) ---
+        # ---- Hand detection (unchanged) ----
         detected_hands = []
-        conflict = False
         if results and results.multi_hand_landmarks:
             if results.multi_handedness:
                 labels = [results.multi_handedness[i].classification[0].label
                           for i in range(len(results.multi_hand_landmarks))]
                 if len(labels) == 2 and labels[0] == labels[1]:
-                    conflict = True
-                    print(f"⚠️ Handedness conflict: both detected as {labels[0]}. Falling back to spatial sorting.")
+                    #print(f"⚠️ Handedness conflict: both detected as {labels[0]}. Falling back to spatial sorting.")
                     hands_with_x = []
                     for hand_landmarks in results.multi_hand_landmarks:
                         wrist_x = hand_landmarks.landmark[0].x
@@ -245,15 +245,12 @@ def main():
                     detected_hands.append(('Left', hands[0][1]))
                 if len(hands) > 1:
                     detected_hands.append(('Right', hands[1][1]))
-        else:
-            # No hands detected
-            pass
 
-        # --- Update tracker with positions ---
+        # ---- Update tracker ----
         detected_positions = [(label, lm.landmark[0].x, lm.landmark[0].y) for label, lm in detected_hands]
         stable_hands = update_hand_tracks(detected_positions)
 
-        # --- Assign each detected hand to a stable label and process ---
+        # ---- Process each detected hand (draws on the original frame) ----
         processed_ids = set()
         for label, lm in detected_hands:
             wrist = lm.landmark[0]
@@ -262,7 +259,7 @@ def main():
             for s_label, sx, sy in stable_hands:
                 dx = sx - wrist.x
                 dy = sy - wrist.y
-                dist = dx * dx + dy * dy
+                dist = dx*dx + dy*dy
                 if dist < best_dist:
                     best_dist = dist
                     best_stable_label = s_label
@@ -273,45 +270,62 @@ def main():
                     process_hand(hand_id, lm, frame, w, h, vision)
                     processed_ids.add(hand_id)
 
-        # Debug: check for missing hands
-        if len(processed_ids) < 2:
-            expected = {0, 1}
-            missing = expected - processed_ids
-            for hand_id in missing:
-                if hand_preset[hand_id] != 0:
-                    print(f"⚠️ Hand {hand_id} ({'Left' if hand_id == 0 else 'Right'}) not processed this frame.")
+        # ---- Now the frame has all drawings ----
+        # ---- Get window size and compute layout ----
+        try:
+            rect = cv2.getWindowImageRect(window_name)
+            win_w, win_h = rect[2], rect[3]
+        except Exception:
+            win_w, win_h = 1280, 720
+        win_w = max(win_w, 600)
+        win_h = max(win_h, 400)
 
-        # --- Build the combined canvas ---
-        canvas_h = h + ui.BOTTOM_PANEL_HEIGHT
-        canvas_w = w + ui.RIGHT_PANEL_WIDTH
-        canvas = np.full((canvas_h, canvas_w, 3), 30, dtype=np.uint8)
+        right_panel_w = max(ui.MIN_RIGHT_PANEL_WIDTH, int(win_w * ui.RIGHT_PANEL_RATIO))
+        bottom_panel_h = max(ui.MIN_BOTTOM_PANEL_HEIGHT, int(win_h * ui.BOTTOM_PANEL_RATIO))
+        camera_w = win_w - right_panel_w
+        camera_h = win_h - bottom_panel_h
 
-        # Place the camera frame (with drawings) in top-left corner
-        canvas[0:h, 0:w] = frame
+        # ---- Resize the drawn frame to fit camera area (preserve aspect) ----
+        aspect = w / h
+        if camera_w / camera_h > aspect:
+            new_h = camera_h
+            new_w = int(new_h * aspect)
+        else:
+            new_w = camera_w
+            new_h = int(new_w / aspect)
+        x_offset = (camera_w - new_w) // 2
+        y_offset = (camera_h - new_h) // 2
+        frame_resized = cv2.resize(frame, (new_w, new_h))
 
-        # Draw right panel (values) – includes MIDI status
+        # ---- Create final canvas ----
+        canvas = np.full((win_h, win_w, 3), 30, dtype=np.uint8)
+        canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = frame_resized
+
+        # ---- Draw UI panels (dynamic sizing) ----
+        font_scale = min(win_w, win_h) / 1200.0
         midi_status = "MIDI: Active" if midi_out.port else "MIDI: Not connected"
-        ui.draw_right_panel(canvas, w, 0, ui.RIGHT_PANEL_WIDTH, h,
-                            hand_preset, hand_smoothed, midi_status)
+        ui.draw_right_panel(canvas, camera_w, 0, right_panel_w, camera_h,
+                            hand_preset, hand_smoothed, midi_status, font_scale)
+        ui.draw_bottom_panel(canvas, 0, camera_h, win_w, bottom_panel_h,
+                             hand_preset, font_scale)
 
-        # Draw bottom panel (buttons)
-        ui.draw_bottom_panel(canvas, 0, h, canvas_w, ui.BOTTOM_PANEL_HEIGHT, hand_preset)
-
-        # --- Mapper Mode overlay ---
         if mapper_mode:
-            ui.draw_mapper_overlay(canvas, w, h, hand_preset, hand_smoothed)
+            ui.draw_mapper_overlay(canvas, win_w, win_h, hand_preset, hand_smoothed, font_scale)
 
-        # --- Send MIDI messages (both hands) ---
+        # ---- Shortcut hints ----
+        cv2.putText(canvas, "Press 'm' for MIDI Mapper Mode", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), 1)
+        cv2.putText(canvas, "0-9: LEFT preset | Shift+0-9: RIGHT preset",
+                    (10, win_h - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), 1)
+
+        # ---- Send MIDI (unchanged) ----
         messages_to_send = []
         for hand_id in (0, 1):
             preset_idx = hand_preset[hand_id]
             if preset_idx == 0:
                 continue
             preset = PRESETS[preset_idx]
-
-            # Determine channel offset for this hand
             hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
-
             for feature, (base_channel, cc) in preset.midi_map.items():
                 if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
                     raw = hand_smoothed[hand_id][feature]
@@ -321,7 +335,6 @@ def main():
                     norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
                     midi_val = normalize.midi_value(norm)
                     if abs(midi_val - hand_last_midi[hand_id].get(feature, -1)) > preset.deadband * 127:
-                        # Calculate actual MIDI channel (0-15)
                         actual_channel = min(15, max(0, base_channel + hand_offset))
                         messages_to_send.append((actual_channel, cc, midi_val))
                         hand_last_midi[hand_id][feature] = midi_val
@@ -329,59 +342,31 @@ def main():
         if messages_to_send:
             midi_out.send_messages(messages_to_send)
 
-        # --- Add shortcut hints ---
-        # Show Mapper Mode hint when active
-        cv2.putText(canvas, "Press 'm' for MIDI Mapper Mode", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        # ---- Show ----
+        cv2.imshow(window_name, canvas)
 
-        cv2.putText(canvas, "0-9: change LEFT preset | Shift+0-9: change RIGHT preset",
-                    (10, canvas_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-
-        cv2.imshow("Motion Controller", canvas)
-
-        # --- Keyboard handling ---
+        # ---- Keyboard ----
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC
+        if key == 27:
             break
-
-        # Toggle Mapper Mode
         if key == ord('m'):
             mapper_mode = not mapper_mode
             if not mapper_mode:
-                ui.mapper_rects = []   # clear buttons when exiting
+                ui.mapper_rects = []
             continue
-
-        # Left hand: number keys 0-9
-        if 48 <= key <= 57:  # '0' to '9'
+        if 48 <= key <= 57:
             idx = key - 48
             if idx < len(PRESETS):
                 switch_preset(0, idx)
-
-        # Right hand: Shift+number (symbols)
         shift_map = {
-            # US layout
-            33: 1,  # !
-            64: 2,  # @
-            35: 3,  # #
-            36: 4,  # $
-            37: 5,  # %
-            94: 6,  # ^
-            38: 7,  # &
-            42: 8,  # *
-            40: 9,  # (
-            41: 0,  # )
-            # German layout
-            34: 2,  # "
-            167: 3, # §
-            47: 7,  # /
-            61: 0,  # =
+            33: 1, 64: 2, 35: 3, 36: 4, 37: 5, 94: 6, 38: 7, 42: 8, 40: 9,
+            41: 0, 34: 2, 167: 3, 47: 7, 61: 0
         }
         if key in shift_map:
             idx = shift_map[key]
             if idx < len(PRESETS):
                 switch_preset(1, idx)
 
-    # Cleanup
     vision.release()
     midi_out.close()
     cv2.destroyAllWindows()
