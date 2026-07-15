@@ -7,21 +7,39 @@ import config
 # Global variables for button rectangles
 button_rects_left = []
 button_rects_right = []
-mapper_rects = []   # (x1, y1, x2, y2, hand_id, feature)
+mapper_rects = []
+topmost_button_rect = None   # (x1, y1, x2, y2)
 
 # UI layout constants
 RIGHT_PANEL_WIDTH = 320
 BOTTOM_PANEL_HEIGHT = 140
 BUTTON_ROW_HEIGHT = 60
 
+# Always‑on‑top state (will be toggled)
+always_on_top = False
+
 def init_ui():
-    global button_rects_left, button_rects_right, mapper_rects
+    global button_rects_left, button_rects_right, mapper_rects, topmost_button_rect
     button_rects_left = []
     button_rects_right = []
     mapper_rects = []
+    topmost_button_rect = None
+
+def set_window_topmost(window_name, state):
+    """Set the OpenCV window as always‑on‑top."""
+    try:
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1 if state else 0)
+    except Exception as e:
+        print(f"Could not set topmost: {e}")
+
+def toggle_topmost(window_name):
+    """Toggle the always‑on‑top state and update the window."""
+    global always_on_top
+    always_on_top = not always_on_top
+    set_window_topmost(window_name, always_on_top)
 
 def mouse_callback(event, x, y, flags, param):
-    """Handle mouse clicks: mapper buttons first, then preset buttons."""
+    """Handle mouse clicks: mapper buttons, topmost button, then preset buttons."""
     if event != cv2.EVENT_LBUTTONDOWN:
         return
 
@@ -30,8 +48,17 @@ def mouse_callback(event, x, y, flags, param):
     hand_smoothed = param['hand_smoothed']
     midi_out = param['midi_out']
     mapper_mode = param['mapper_mode']
+    window_name = param['window_name']
 
-    # 1. Check Mapper Mode buttons (if active)
+    # 1. Check topmost button (if drawn)
+    global topmost_button_rect
+    if topmost_button_rect:
+        x1, y1, x2, y2 = topmost_button_rect
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            toggle_topmost(window_name)
+            return
+
+    # 2. Check Mapper Mode buttons (if active)
     if mapper_mode and mapper_rects:
         for (x1, y1, x2, y2, hand_id, feature) in mapper_rects:
             if x1 <= x <= x2 and y1 <= y <= y2:
@@ -56,10 +83,9 @@ def mouse_callback(event, x, y, flags, param):
                 print(f"Mapper: hand{hand_id} {feature} -> ch{actual_ch+1} cc{cc} val{value}")
                 return
 
-    # 2. Fallback: preset buttons
+    # 3. Fallback: preset buttons
     for (x1, y1, x2, y2, idx) in button_rects_left:
         if x1 <= x <= x2 and y1 <= y <= y2:
-            # Switch left hand preset
             switch_preset_func = param['switch_preset']
             switch_preset_func(0, idx)
             return
@@ -69,12 +95,12 @@ def mouse_callback(event, x, y, flags, param):
             switch_preset_func(1, idx)
             return
 
+# ----------------------------------------------------------------------
 def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
                      hand_preset, hand_smoothed, midi_status):
-    """
-    Draw the value display panel on the right side of the canvas.
-    midi_status is a string (e.g., "MIDI: Active" or "MIDI: Not connected").
-    """
+    """Draw the value display panel with a topmost toggle button."""
+    global topmost_button_rect, always_on_top
+
     # Background
     cv2.rectangle(canvas, (x_offset, y_offset), (x_offset + panel_width, y_offset + height),
                   (50, 50, 50), -1)
@@ -82,6 +108,27 @@ def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
     # MIDI status at the top
     cv2.putText(canvas, midi_status, (x_offset + 10, y_offset + 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+    # ---- Always‑on‑top toggle button (top‑right corner) ----
+    btn_size = 30
+    btn_x = x_offset + panel_width - btn_size - 10
+    btn_y = y_offset + 10
+    # Draw button (circle)
+    color = (0, 255, 0) if always_on_top else (100, 100, 100)
+    cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2), btn_size//2 - 2, color, -1)
+    cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2), btn_size//2 - 2, (255, 255, 255), 1)
+    # Draw a small "pin" icon (just a vertical line and a dot)
+    # or we can skip text; we'll draw a simple "🔒" like shape using lines
+    if always_on_top:
+        # Draw a small lock-like icon (optional)
+        cv2.line(canvas, (btn_x + btn_size//2, btn_y + 8), (btn_x + btn_size//2, btn_y + btn_size//2), (255,255,255), 2)
+        cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2 + 4), 3, (255,255,255), -1)
+    else:
+        # Draw an unlocked icon (open padlock)
+        cv2.line(canvas, (btn_x + btn_size//2, btn_y + btn_size//2 - 2), (btn_x + btn_size//2, btn_y + btn_size//2 + 6), (255,255,255), 2)
+        cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2 + 8), 3, (255,255,255), -1)
+
+    topmost_button_rect = (btn_x, btn_y, btn_x + btn_size, btn_y + btn_size)
 
     # ----- Left hand section -----
     header_y = y_offset + 50

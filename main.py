@@ -197,7 +197,8 @@ def main():
         'hand_smoothed': hand_smoothed,
         'midi_out': midi_out,
         'mapper_mode': lambda: mapper_mode,   # pass as callable to get current value
-        'switch_preset': switch_preset
+        'switch_preset': switch_preset,
+        'window_name': "Motion Controller"
     }
     cv2.namedWindow("Motion Controller")
     cv2.setMouseCallback("Motion Controller", ui.mouse_callback, param=callback_params)
