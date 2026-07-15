@@ -26,6 +26,10 @@ next_track_id = 0
 MAX_AGE = 20              # frames before a track is removed
 STABILITY_THRESHOLD = 10   # frames before switching label
 
+# --- Mapper mode toggle ---
+mapper_mode = False
+
+# ----------------------------------------------------------------------
 def update_hand_tracks(detected):
     """
     detected: list of (label, wx, wy)
@@ -174,7 +178,7 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
 # ----------------------------------------------------------------------
 def main():
     global midi_out, hand_preset, hand_filters, hand_smoothed, hand_last_midi
-    global hand_tracks, next_track_id
+    global hand_tracks, next_track_id, mapper_mode
 
     # Setup vision
     vision = Vision(camera_index=config.CAMERA_INDEX)
@@ -187,9 +191,12 @@ def main():
     for hand_id in (0, 1):
         init_hand(hand_id)
 
-    # Set up mouse callback with parameters
+    # Set up mouse callback with parameters (now including mapper mode)
     callback_params = {
         'hand_preset': hand_preset,
+        'hand_smoothed': hand_smoothed,
+        'midi_out': midi_out,
+        'mapper_mode': lambda: mapper_mode,   # pass as callable to get current value
         'switch_preset': switch_preset
     }
     cv2.namedWindow("Motion Controller")
@@ -203,7 +210,7 @@ def main():
 
         h, w = frame.shape[:2]
 
-        # --- Detect hands and get their labels ---
+        # --- Detect hands and get their labels (unchanged) ---
         detected_hands = []
         conflict = False
         if results and results.multi_hand_landmarks:
@@ -289,6 +296,10 @@ def main():
         # Draw bottom panel (buttons)
         ui.draw_bottom_panel(canvas, 0, h, canvas_w, ui.BOTTOM_PANEL_HEIGHT, hand_preset)
 
+        # --- Mapper Mode overlay ---
+        if mapper_mode:
+            ui.draw_mapper_overlay(canvas, w, h, hand_preset, hand_smoothed)
+
         # --- Send MIDI messages (both hands) ---
         messages_to_send = []
         for hand_id in (0, 1):
@@ -318,6 +329,10 @@ def main():
             midi_out.send_messages(messages_to_send)
 
         # --- Add shortcut hints ---
+        # Show Mapper Mode hint when active
+        cv2.putText(canvas, "Press 'm' for MIDI Mapper Mode", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
         cv2.putText(canvas, "0-9: change LEFT preset | Shift+0-9: change RIGHT preset",
                     (10, canvas_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
@@ -327,6 +342,13 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC
             break
+
+        # Toggle Mapper Mode
+        if key == ord('m'):
+            mapper_mode = not mapper_mode
+            if not mapper_mode:
+                ui.mapper_rects = []   # clear buttons when exiting
+            continue
 
         # Left hand: number keys 0-9
         if 48 <= key <= 57:  # '0' to '9'

@@ -77,7 +77,7 @@ PRESETS = [
         midi_map={
             "palm_x": (2, 22),
             "palm_y": (2, 23),
-            "thumb_index_dist": (3, 30)
+            "thumb_index_dist": (2, 30)
         },
         norm_ranges={
             "palm_x": {"min": 0.2, "max": 0.8},

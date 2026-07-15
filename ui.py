@@ -2,40 +2,72 @@
 import cv2
 import normalize
 from presets import PRESETS
+import config
 
-# Global variables for button rectangles (will be updated by draw functions)
+# Global variables for button rectangles
 button_rects_left = []
 button_rects_right = []
+mapper_rects = []   # (x1, y1, x2, y2, hand_id, feature)
 
-# UI layout constants (can be adjusted)
-RIGHT_PANEL_WIDTH = 320      # slightly wider for longer text
+# UI layout constants
+RIGHT_PANEL_WIDTH = 320
 BOTTOM_PANEL_HEIGHT = 140
 BUTTON_ROW_HEIGHT = 60
-LEFT_MARGIN = 10
-TOP_MARGIN = 10
 
 def init_ui():
-    """Initialize any UI-related globals."""
-    global button_rects_left, button_rects_right
+    global button_rects_left, button_rects_right, mapper_rects
     button_rects_left = []
     button_rects_right = []
+    mapper_rects = []
 
 def mouse_callback(event, x, y, flags, param):
-    """Global mouse callback – switches presets when clicking a button."""
-    if event == cv2.EVENT_LBUTTONDOWN:
-        hand_preset = param['hand_preset']
-        switch_preset_func = param['switch_preset']
+    """Handle mouse clicks: mapper buttons first, then preset buttons."""
+    if event != cv2.EVENT_LBUTTONDOWN:
+        return
 
-        # Check left hand buttons (upper row)
-        for (x1, y1, x2, y2, idx) in button_rects_left:
+    # Unpack parameters
+    hand_preset = param['hand_preset']
+    hand_smoothed = param['hand_smoothed']
+    midi_out = param['midi_out']
+    mapper_mode = param['mapper_mode']
+
+    # 1. Check Mapper Mode buttons (if active)
+    if mapper_mode and mapper_rects:
+        for (x1, y1, x2, y2, hand_id, feature) in mapper_rects:
             if x1 <= x <= x2 and y1 <= y <= y2:
-                switch_preset_func(0, idx)
+                # Send current value or default 64
+                value = 64
+                if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
+                    raw = hand_smoothed[hand_id][feature]
+                    preset = PRESETS[hand_preset[hand_id]]
+                    norm_range = preset.norm_ranges.get(feature)
+                    if norm_range:
+                        norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
+                        value = normalize.midi_value(norm)
+                # Get channel and CC from preset
+                preset_idx = hand_preset[hand_id]
+                if preset_idx == 0:
+                    return
+                preset = PRESETS[preset_idx]
+                base_ch, cc = preset.midi_map[feature]
+                hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+                actual_ch = min(15, max(0, base_ch + hand_offset))
+                midi_out.send_cc(actual_ch, cc, value)
+                print(f"Mapper: hand{hand_id} {feature} -> ch{actual_ch+1} cc{cc} val{value}")
                 return
-        # Check right hand buttons (lower row)
-        for (x1, y1, x2, y2, idx) in button_rects_right:
-            if x1 <= x <= x2 and y1 <= y <= y2:
-                switch_preset_func(1, idx)
-                return
+
+    # 2. Fallback: preset buttons
+    for (x1, y1, x2, y2, idx) in button_rects_left:
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            # Switch left hand preset
+            switch_preset_func = param['switch_preset']
+            switch_preset_func(0, idx)
+            return
+    for (x1, y1, x2, y2, idx) in button_rects_right:
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            switch_preset_func = param['switch_preset']
+            switch_preset_func(1, idx)
+            return
 
 def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
                      hand_preset, hand_smoothed, midi_status):
@@ -168,3 +200,58 @@ def draw_bottom_panel(canvas, x_offset, y_offset, width, height, hand_preset):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
     cv2.putText(canvas, "Right hand", (x_offset + 10, y_offset + height//2 - 5),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+# ----------------------------------------------------------------------
+def draw_mapper_overlay(canvas, w, h, hand_preset, hand_smoothed):
+    """Draw overlay with clickable buttons for each feature of each hand."""
+    global mapper_rects
+    mapper_rects = []
+
+    # Dim the background (camera feed area)
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.4, canvas, 0.6, 0, canvas)
+
+    # Title
+    cv2.putText(canvas, "MIDI MAPPER MODE - Click a button to send MIDI", (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+    # Layout: two columns (left hand, right hand)
+    col_x_left = 50
+    col_x_right = w // 2 + 50
+    y_start = 80
+    button_height = 40
+    button_width = 220
+    spacing = 10
+
+    for hand_id, (label, col_x) in enumerate([("Left", col_x_left), ("Right", col_x_right)]):
+        preset_idx = hand_preset[hand_id]
+        if preset_idx == 0:
+            continue
+        preset = PRESETS[preset_idx]
+
+        # Hand label
+        cv2.putText(canvas, f"{label} Hand (Preset: {preset.name})", (col_x, y_start - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+        y = y_start
+        for feature in preset.midi_map.keys():
+            base_ch, cc = preset.midi_map[feature]
+            hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+            actual_ch = min(15, max(0, base_ch + hand_offset))
+            text = f"{feature} (ch{actual_ch + 1} cc{cc})"
+
+            x1 = col_x
+            x2 = x1 + button_width
+            y1 = y
+            y2 = y + button_height
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (100, 100, 100), -1)
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (255, 255, 255), 2)
+            cv2.putText(canvas, text, (x1 + 10, y1 + 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            mapper_rects.append((x1, y1, x2, y2, hand_id, feature))
+            y += button_height + spacing
+
+    # Exit hint
+    cv2.putText(canvas, "Press 'm' to exit Mapper Mode", (20, h - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
