@@ -102,8 +102,8 @@ PRESETS = [
         mirror_left_hand=False,
         note_config={
             "channel": 1,           # base channel (will add hand offset)
-            "note_min": 36,         # C2
-            "note_max": 84,         # C6
+            "note_min": 12,         #
+            "note_max": 103,         #
             "threshold": 0.3,       # distance < threshold => note on
             "timeout": 20.0         # seconds before auto note-off
         }

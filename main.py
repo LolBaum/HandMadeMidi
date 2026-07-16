@@ -31,10 +31,22 @@ STABILITY_THRESHOLD = 10   # frames before switching label
 # --- Mapper mode toggle ---
 mapper_mode = False
 
-# --- Note state per hand ---
+# --- Note state per hand (extended for pitch bend) ---
 hand_note_state = [
-    {'active': False, 'note': None, 'start_time': 0.0},
-    {'active': False, 'note': None, 'start_time': 0.0}
+    {
+        'active': False,
+        'note': None,
+        'base_note': None,
+        'base_y': None,
+        'start_time': 0.0
+    },
+    {
+        'active': False,
+        'note': None,
+        'base_note': None,
+        'base_y': None,
+        'start_time': 0.0
+    }
 ]
 
 # ----------------------------------------------------------------------
@@ -116,20 +128,21 @@ def init_hand(hand_id):
     hand_last_midi[hand_id] = {feature: -1 for feature in preset.midi_map.keys()}
 
 def switch_preset(hand_id, preset_idx):
-    """Change preset for a specific hand, turning off notes if needed."""
-    # If old preset was note generator and a note is active, turn it off
+    """Change preset for a specific hand, turning off notes and resetting pitch bend."""
     old_preset = PRESETS[hand_preset[hand_id]]
     if old_preset.note_config is not None and hand_note_state[hand_id]['active']:
         send_note_off(hand_id, hand_note_state[hand_id]['note'])
+        send_pitch_bend(hand_id, 0)          # reset bend
         hand_note_state[hand_id]['active'] = False
         hand_note_state[hand_id]['note'] = None
+        hand_note_state[hand_id]['base_note'] = None
+        hand_note_state[hand_id]['base_y'] = None
         hand_note_state[hand_id]['start_time'] = 0.0
 
     if preset_idx < 0 or preset_idx >= len(PRESETS):
         return
     hand_preset[hand_id] = preset_idx
     init_hand(hand_id)
-
 # ----------------------------------------------------------------------
 def send_note_on(hand_id, note, velocity=100):
     """Send a note-on message for a hand using its channel offset."""
@@ -161,14 +174,37 @@ def send_note_off(hand_id, note):
     midi_out.port.send(msg)
     print(f"Note OFF: hand{hand_id} ch{channel+1} note{note}")
 
+def send_pitch_bend(hand_id, bend_value):
+    """
+    Send a pitch bend message on the hand's MIDI channel.
+    bend_value: -8192 .. 8191  (0 = center/no bend)
+    """
+    global midi_out
+    if midi_out is None or not midi_out.port:
+        return
+    preset = PRESETS[hand_preset[hand_id]]
+    if preset.note_config is None:
+        return
+    base_ch = preset.note_config['channel']
+    hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+    channel = min(15, max(0, base_ch + hand_offset))
+    # Clamp to valid range
+    bend_value = int(round(bend_value))
+    bend_value = max(-8192, min(8191, bend_value))
+    msg = mido.Message('pitchwheel', channel=channel, pitch=bend_value)
+    midi_out.port.send(msg)
+
 def note_cleanup():
-    """Turn off all active notes on exit/preset switch."""
+    """Turn off all active notes and reset pitch bend."""
     for hand_id in (0, 1):
         if hand_note_state[hand_id]['active']:
             note = hand_note_state[hand_id]['note']
             send_note_off(hand_id, note)
+            send_pitch_bend(hand_id, 0)
             hand_note_state[hand_id]['active'] = False
             hand_note_state[hand_id]['note'] = None
+            hand_note_state[hand_id]['base_note'] = None
+            hand_note_state[hand_id]['base_y'] = None
             hand_note_state[hand_id]['start_time'] = 0.0
 
 # ----------------------------------------------------------------------
@@ -326,7 +362,7 @@ def main():
                         process_hand(hand_id, lm, frame, w, h, vision)
                         processed_ids.add(hand_id)
 
-            # ---- Note generation logic (for each hand with note_config) ----
+            # ---- Note generation logic (with pitch bend) ----
             current_time = time.time()
             for hand_id in (0, 1):
                 preset_idx = hand_preset[hand_id]
@@ -336,13 +372,14 @@ def main():
                 if preset.note_config is None:
                     continue
 
-                # We need smoothed values for palm_y and thumb_index_dist
+                # Need smoothed values for palm_y and thumb_index_dist
                 if 'palm_y' not in hand_smoothed[hand_id] or hand_smoothed[hand_id]['palm_y'] is None:
                     continue
-                if 'thumb_index_dist' not in hand_smoothed[hand_id] or hand_smoothed[hand_id]['thumb_index_dist'] is None:
+                if 'thumb_index_dist' not in hand_smoothed[hand_id] or hand_smoothed[hand_id][
+                    'thumb_index_dist'] is None:
                     continue
 
-                # Compute normalised pitch from palm_y
+                # Get normalised palm_y (0..1)
                 norm_range = preset.norm_ranges.get('palm_y')
                 if norm_range is None:
                     continue
@@ -351,43 +388,56 @@ def main():
                     norm_range["min"],
                     norm_range["max"]
                 )
+                # Compute note number from palm_y
                 note_min = preset.note_config['note_min']
                 note_max = preset.note_config['note_max']
-                note = int(round(norm_y * (note_max - note_min) + note_min))
-                note = max(0, min(127, note))
+                current_note = int(round(norm_y * (note_max - note_min) + note_min))
+                current_note = max(0, min(127, current_note))
 
-                # Distance (already normalised by hand scale in feature extraction)
+                # Distance (already normalised by hand scale)
                 dist = hand_smoothed[hand_id]['thumb_index_dist']
                 threshold = preset.note_config['threshold']
                 timeout = preset.note_config['timeout']
 
                 state = hand_note_state[hand_id]
 
-                # State machine
+                # ---- State machine ----
                 if not state['active'] and dist < threshold:
-                    send_note_on(hand_id, note)
+                    # Trigger note-on with current pitch
+                    send_note_on(hand_id, current_note)
                     state['active'] = True
-                    state['note'] = note
+                    state['note'] = current_note
+                    state['base_note'] = current_note
+                    state['base_y'] = norm_y
                     state['start_time'] = current_time
+                    # Reset pitch bend to center (0)
+                    send_pitch_bend(hand_id, 0)
+
                 elif state['active'] and dist >= threshold:
+                    # Note-off
                     send_note_off(hand_id, state['note'])
+                    send_pitch_bend(hand_id, 0)  # reset bend
                     state['active'] = False
                     state['note'] = None
-                    state['start_time'] = 0.0
-                elif state['active'] and state['note'] != note:
-                    # Pitch change while note active – turn off old and start new
-                    send_note_off(hand_id, state['note'])
-                    send_note_on(hand_id, note)
-                    state['note'] = note
-                    state['start_time'] = current_time
-
-                # Timeout check
-                if state['active'] and (current_time - state['start_time']) > timeout:
-                    send_note_off(hand_id, state['note'])
-                    state['active'] = False
-                    state['note'] = None
+                    state['base_note'] = None
+                    state['base_y'] = None
                     state['start_time'] = 0.0
 
+                elif state['active']:
+                    # Note is held – send pitch bend based on deviation from base_y
+                    bend = int(round((norm_y - state['base_y']) * 8191))
+                    bend = max(-8192, min(8191, bend))
+                    send_pitch_bend(hand_id, bend)
+
+                    # Timeout check
+                    if (current_time - state['start_time']) > timeout:
+                        send_note_off(hand_id, state['note'])
+                        send_pitch_bend(hand_id, 0)
+                        state['active'] = False
+                        state['note'] = None
+                        state['base_note'] = None
+                        state['base_y'] = None
+                        state['start_time'] = 0.0
             # ---- Build the combined canvas (dynamic resizing) ----
             try:
                 rect = cv2.getWindowImageRect(window_name)
