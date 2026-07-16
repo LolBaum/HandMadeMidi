@@ -3,7 +3,8 @@ from hand_features import HandFeatures
 
 class Preset:
     def __init__(self, name, features_func, midi_map, norm_ranges,
-                 filter_settings, deadband=0.01, mirror_left_hand=True):
+                 filter_settings, deadband=0.01, mirror_left_hand=True,
+                 note_config=None):
         self.name = name
         self.features_func = features_func
         self.midi_map = midi_map
@@ -11,12 +12,13 @@ class Preset:
         self.filter_settings = filter_settings
         self.deadband = deadband
         self.mirror_left_hand = mirror_left_hand
+        self.note_config = note_config  # dict: {channel, note_min, note_max, threshold, timeout}
 
 def make_preset(name, method_name, midi_map, norm_ranges, filter_settings,
-                deadband=0.01, mirror_left_hand=True):
+                deadband=0.01, mirror_left_hand=True, note_config=None):
     method = getattr(HandFeatures, method_name)
     return Preset(name, method, midi_map, norm_ranges, filter_settings,
-                  deadband, mirror_left_hand)
+                  deadband, mirror_left_hand, note_config)
 
 PRESETS = [
     # 0: Off
@@ -48,7 +50,7 @@ PRESETS = [
         mirror_left_hand=False,
     ),
 
-    # 3: Finger Spread (normalised)
+    # 3: Finger Spread
     make_preset(
         name="Finger Spread",
         method_name="finger_spread",
@@ -70,26 +72,40 @@ PRESETS = [
         mirror_left_hand=True,
     ),
 
-    # 5: Position + Spread (combined)
+    # 5: Position + Spread
     make_preset(
         name="Pos+Spread",
         method_name="position_and_spread",
-        midi_map={
-            "palm_x": (2, 22),
-            "palm_y": (2, 23),
-            "thumb_index_dist": (2, 30)
-        },
-        norm_ranges={
-            "palm_x": {"min": 0.2, "max": 0.8},
-            "palm_y": {"min": 0.2, "max": 0.8},
-            "thumb_index_dist": {"min": 0.2, "max": 1.2}
-        },
-        filter_settings={
-            "palm_x": {"min_cutoff": 0.3, "beta": 0.1},
-            "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
-            "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}
-        },
+        midi_map={"palm_x": (2, 22), "palm_y": (2, 23), "thumb_index_dist": (3, 30)},
+        norm_ranges={"palm_x": {"min": 0.1, "max": 0.9},
+                     "palm_y": {"min": 0.1, "max": 0.9},
+                     "thumb_index_dist": {"min": 0.0, "max": 1.2}},
+        filter_settings={"palm_x": {"min_cutoff": 0.3, "beta": 0.1},
+                         "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
+                         "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
         deadband=0.015,
-        mirror_left_hand=False,   # position should be absolute; spread is symmetric anyway
+        mirror_left_hand=False,
+    ),
+
+    # 6: Note Generator (NEW)
+    make_preset(
+        name="Note Gen",
+        method_name="position_and_spread",
+        midi_map={"palm_x": (1, 1)},  # CC for effect (e.g., modulation)
+        norm_ranges={"palm_x": {"min": 0.1, "max": 0.9},
+                     "palm_y": {"min": 0.1, "max": 0.9},
+                     "thumb_index_dist": {"min": 0.0, "max": 1.2}},
+        filter_settings={"palm_x": {"min_cutoff": 0.3, "beta": 0.1},
+                         "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
+                         "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
+        deadband=0.015,
+        mirror_left_hand=False,
+        note_config={
+            "channel": 1,           # base channel (will add hand offset)
+            "note_min": 36,         # C2
+            "note_max": 84,         # C6
+            "threshold": 0.3,       # distance < threshold => note on
+            "timeout": 20.0         # seconds before auto note-off
+        }
     ),
 ]
