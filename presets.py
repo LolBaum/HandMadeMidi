@@ -87,11 +87,12 @@ PRESETS = [
         mirror_left_hand=False,
     ),
 
+    # presets.py (excerpt – only preset 6 changed)
     # 6: Note Generator (NEW)
     make_preset(
         name="Note Gen",
         method_name="position_and_spread",
-        midi_map={"palm_x": (1, 1)},  # CC for effect (e.g., modulation)
+        midi_map={},  # no CC messages – all note/pitch data are internal
         norm_ranges={"palm_x": {"min": 0.1, "max": 0.9},
                      "palm_y": {"min": 0.1, "max": 0.9},
                      "thumb_index_dist": {"min": 0.0, "max": 1.2}},
@@ -101,11 +102,11 @@ PRESETS = [
         deadband=0.015,
         mirror_left_hand=False,
         note_config={
-            "channel": 1,           # base channel (will add hand offset)
-            "note_min": 12,         #
-            "note_max": 103,         #
-            "threshold": 0.3,       # distance < threshold => note on
-            "timeout": 20.0         # seconds before auto note-off
+            "channel": 1,
+            "note_min": 12,
+            "note_max": 103,
+            "threshold": 0.3,
+            "timeout": 20.0
         }
     ),
 ]

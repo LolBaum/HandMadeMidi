@@ -363,6 +363,7 @@ def main():
                         processed_ids.add(hand_id)
 
             # ---- Note generation logic (with pitch bend) ----
+            # ---- Note generation (preset 6) ----
             current_time = time.time()
             for hand_id in (0, 1):
                 preset_idx = hand_preset[hand_id]
@@ -372,46 +373,46 @@ def main():
                 if preset.note_config is None:
                     continue
 
-                # Need smoothed values for palm_y and thumb_index_dist
-                if 'palm_y' not in hand_smoothed[hand_id] or hand_smoothed[hand_id]['palm_y'] is None:
-                    continue
-                if 'thumb_index_dist' not in hand_smoothed[hand_id] or hand_smoothed[hand_id][
-                    'thumb_index_dist'] is None:
+                # Need smoothed values for palm_x, palm_y, and thumb_index_dist
+                if any(f not in hand_smoothed[hand_id] or hand_smoothed[hand_id][f] is None
+                       for f in ('palm_x', 'palm_y', 'thumb_index_dist')):
                     continue
 
-                # Get normalised palm_y (0..1)
-                norm_range = preset.norm_ranges.get('palm_y')
-                if norm_range is None:
-                    continue
+                # Get normalized values
+                norm_x = normalize.normalize_value(
+                    hand_smoothed[hand_id]['palm_x'],
+                    preset.norm_ranges['palm_x']['min'],
+                    preset.norm_ranges['palm_x']['max']
+                )
                 norm_y = normalize.normalize_value(
                     hand_smoothed[hand_id]['palm_y'],
-                    norm_range["min"],
-                    norm_range["max"]
+                    preset.norm_ranges['palm_y']['min'],
+                    preset.norm_ranges['palm_y']['max']
                 )
-                # Compute note number from palm_y
+                dist = hand_smoothed[hand_id]['thumb_index_dist']
+
+                # Invert note: higher y (down) -> lower note
                 note_min = preset.note_config['note_min']
                 note_max = preset.note_config['note_max']
-                current_note = int(round(norm_y * (note_max - note_min) + note_min))
+                current_note = int(round((1 - norm_y) * (note_max - note_min) + note_min))
                 current_note = max(0, min(127, current_note))
 
-                # Distance (already normalised by hand scale)
-                dist = hand_smoothed[hand_id]['thumb_index_dist']
+                # Pitch bend from palm_x: 0..1 → -8192..8191
+                bend = int(round((norm_x - 0.5) * 16384))  # ~ -8192..8191
+                bend = max(-8192, min(8191, bend))
+
                 threshold = preset.note_config['threshold']
                 timeout = preset.note_config['timeout']
-
                 state = hand_note_state[hand_id]
 
                 # ---- State machine ----
                 if not state['active'] and dist < threshold:
-                    # Trigger note-on with current pitch
+                    # Trigger note-on
                     send_note_on(hand_id, current_note)
                     state['active'] = True
                     state['note'] = current_note
-                    state['base_note'] = current_note
-                    state['base_y'] = norm_y
                     state['start_time'] = current_time
-                    # Reset pitch bend to center (0)
-                    send_pitch_bend(hand_id, 0)
+                    send_pitch_bend(hand_id, bend)  # initial bend
 
                 elif state['active'] and dist >= threshold:
                     # Note-off
@@ -419,15 +420,18 @@ def main():
                     send_pitch_bend(hand_id, 0)  # reset bend
                     state['active'] = False
                     state['note'] = None
-                    state['base_note'] = None
-                    state['base_y'] = None
                     state['start_time'] = 0.0
 
                 elif state['active']:
-                    # Note is held – send pitch bend based on deviation from base_y
-                    bend = int(round((norm_y - state['base_y']) * 8191))
-                    bend = max(-8192, min(8191, bend))
+                    # Note held – update pitch bend every frame
                     send_pitch_bend(hand_id, bend)
+
+                    # If note number changes, retrigger with new note
+                    if current_note != state['note']:
+                        send_note_off(hand_id, state['note'])
+                        send_note_on(hand_id, current_note)
+                        state['note'] = current_note
+                        state['start_time'] = current_time  # reset timeout
 
                     # Timeout check
                     if (current_time - state['start_time']) > timeout:
@@ -435,9 +439,9 @@ def main():
                         send_pitch_bend(hand_id, 0)
                         state['active'] = False
                         state['note'] = None
-                        state['base_note'] = None
-                        state['base_y'] = None
                         state['start_time'] = 0.0
+
+
             # ---- Build the combined canvas (dynamic resizing) ----
             try:
                 rect = cv2.getWindowImageRect(window_name)
@@ -472,7 +476,8 @@ def main():
             font_scale = min(win_w, win_h) / 1200.0
             midi_status = "MIDI: Active" if midi_out.port else "MIDI: Not connected"
             ui.draw_right_panel(canvas, camera_w, 0, right_panel_w, camera_h,
-                                hand_preset, hand_smoothed, midi_status, font_scale)
+                                hand_preset, hand_smoothed, midi_status, font_scale,
+                                note_state=hand_note_state)
             ui.draw_bottom_panel(canvas, 0, camera_h, win_w, bottom_panel_h,
                                  hand_preset, font_scale)
 
