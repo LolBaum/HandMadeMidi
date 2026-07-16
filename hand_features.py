@@ -42,7 +42,6 @@ class HandFeatures:
         }
 
     @staticmethod
-    @staticmethod
     def finger_spread(landmarks):
         """
         Returns a normalised distance between thumb tip and index tip,
@@ -102,3 +101,20 @@ class HandFeatures:
         pos = HandFeatures.palm_position(landmarks)
         spread = HandFeatures.finger_spread(landmarks)
         return {**pos, **spread}
+
+    # ----- NEW METHODS -----
+    @staticmethod
+    def hand_scale(landmarks):
+        """Return a measure of hand scale (distance from wrist to middle MCP)."""
+        wrist = np.array(landmarks[0])
+        middle_mcp = np.array(landmarks[9])
+        scale = np.linalg.norm(middle_mcp - wrist)
+        return {"hand_scale": scale}
+
+    @staticmethod
+    def position_spread_scale(landmarks):
+        """Combine position, spread, and scale for note presets."""
+        pos = HandFeatures.palm_position(landmarks)
+        spread = HandFeatures.finger_spread(landmarks)
+        scale = HandFeatures.hand_scale(landmarks)
+        return {**pos, **spread, **scale}

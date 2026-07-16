@@ -32,20 +32,19 @@ STABILITY_THRESHOLD = 10   # frames before switching label
 mapper_mode = False
 
 # --- Note state per hand (extended for pitch bend) ---
+# At top of main()
 hand_note_state = [
     {
         'active': False,
-        'note': None,
-        'base_note': None,
-        'base_y': None,
-        'start_time': 0.0
+        'note': None,          # the note number that was triggered (fixed)
+        'start_time': 0.0,
+        'smoothed_bend': 0.0   # for exponential smoothing of pitch bend
     },
     {
         'active': False,
         'note': None,
-        'base_note': None,
-        'base_y': None,
-        'start_time': 0.0
+        'start_time': 0.0,
+        'smoothed_bend': 0.0
     }
 ]
 
@@ -362,7 +361,6 @@ def main():
                         process_hand(hand_id, lm, frame, w, h, vision)
                         processed_ids.add(hand_id)
 
-            # ---- Note generation logic (with pitch bend) ----
             # ---- Note generation (preset 6) ----
             current_time = time.time()
             for hand_id in (0, 1):
@@ -391,28 +389,29 @@ def main():
                 )
                 dist = hand_smoothed[hand_id]['thumb_index_dist']
 
-                # Invert note: higher y (down) -> lower note
+                # Compute the note that WOULD be triggered (for capture only)
                 note_min = preset.note_config['note_min']
                 note_max = preset.note_config['note_max']
-                current_note = int(round((1 - norm_y) * (note_max - note_min) + note_min))
-                current_note = max(0, min(127, current_note))
+                candidate_note = int(round((1 - norm_y) * (note_max - note_min) + note_min))
+                candidate_note = max(0, min(127, candidate_note))
 
-                # Pitch bend from palm_x: 0..1 → -8192..8191
-                bend = int(round((norm_x - 0.5) * 16384))  # ~ -8192..8191
-                bend = max(-8192, min(8191, bend))
+                # Pitch bend from palm_x: 0..1 → -8192..8191 (raw)
+                raw_bend = (norm_x - 0.5) * 16384
+                raw_bend = max(-8192, min(8191, raw_bend))
 
                 threshold = preset.note_config['threshold']
                 timeout = preset.note_config['timeout']
                 state = hand_note_state[hand_id]
 
-                # ---- State machine ----
+                # ---- State machine (monophonic, fixed note) ----
                 if not state['active'] and dist < threshold:
-                    # Trigger note-on
-                    send_note_on(hand_id, current_note)
+                    # Trigger note-on with the current candidate note (captured now)
+                    send_note_on(hand_id, candidate_note)
                     state['active'] = True
-                    state['note'] = current_note
+                    state['note'] = candidate_note  # fixed note for the whole gesture
                     state['start_time'] = current_time
-                    send_pitch_bend(hand_id, bend)  # initial bend
+                    state['smoothed_bend'] = raw_bend
+                    send_pitch_bend(hand_id, int(round(state['smoothed_bend'])))
 
                 elif state['active'] and dist >= threshold:
                     # Note-off
@@ -421,17 +420,15 @@ def main():
                     state['active'] = False
                     state['note'] = None
                     state['start_time'] = 0.0
+                    state['smoothed_bend'] = 0.0
 
                 elif state['active']:
-                    # Note held – update pitch bend every frame
-                    send_pitch_bend(hand_id, bend)
-
-                    # If note number changes, retrigger with new note
-                    if current_note != state['note']:
-                        send_note_off(hand_id, state['note'])
-                        send_note_on(hand_id, current_note)
-                        state['note'] = current_note
-                        state['start_time'] = current_time  # reset timeout
+                    # Note held – update pitch bend (smoothed) and mod wheel (already in CC loop)
+                    alpha = 0.2  # smoothing factor for bend
+                    state['smoothed_bend'] = alpha * raw_bend + (1 - alpha) * state['smoothed_bend']
+                    bend_smoothed = int(round(state['smoothed_bend']))
+                    bend_smoothed = max(-8192, min(8191, bend_smoothed))
+                    send_pitch_bend(hand_id, bend_smoothed)
 
                     # Timeout check
                     if (current_time - state['start_time']) > timeout:
@@ -440,7 +437,7 @@ def main():
                         state['active'] = False
                         state['note'] = None
                         state['start_time'] = 0.0
-
+                        state['smoothed_bend'] = 0.0
 
             # ---- Build the combined canvas (dynamic resizing) ----
             try:

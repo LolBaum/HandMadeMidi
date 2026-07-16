@@ -87,18 +87,23 @@ PRESETS = [
         mirror_left_hand=False,
     ),
 
-    # presets.py (excerpt – only preset 6 changed)
     # 6: Note Generator (NEW)
     make_preset(
         name="Note Gen",
-        method_name="position_and_spread",
-        midi_map={},  # no CC messages – all note/pitch data are internal
-        norm_ranges={"palm_x": {"min": 0.1, "max": 0.9},
-                     "palm_y": {"min": 0.1, "max": 0.9},
-                     "thumb_index_dist": {"min": 0.0, "max": 1.2}},
-        filter_settings={"palm_x": {"min_cutoff": 0.3, "beta": 0.1},
-                         "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
-                         "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
+        method_name="position_spread_scale",  # new method
+        midi_map={"hand_scale": (1, 1)},  # CC 1 = mod wheel
+        norm_ranges={
+            "palm_x": {"min": 0.2, "max": 0.8},
+            "palm_y": {"min": 0.2, "max": 0.8},
+            "thumb_index_dist": {"min": 0.0, "max": 1.2},
+            "hand_scale": {"min": 0.1, "max": 0.25}  # adjust to your camera distance
+        },
+        filter_settings={
+            "palm_x": {"min_cutoff": 0.3, "beta": 0.1},
+            "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
+            "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15},
+            "hand_scale": {"min_cutoff": 0.2, "beta": 0.05}  # extra smoothing
+        },
         deadband=0.015,
         mirror_left_hand=False,
         note_config={
