@@ -11,11 +11,11 @@ mapper_rects = []
 topmost_button_rect = None
 
 # Layout ratios (fractions of window size)
-RIGHT_PANEL_RATIO = 0.25          # width ratio
-BOTTOM_PANEL_RATIO = 0.15         # height ratio
+RIGHT_PANEL_RATIO = 0.25
+BOTTOM_PANEL_RATIO = 0.15
 MIN_RIGHT_PANEL_WIDTH = 250
 MIN_BOTTOM_PANEL_HEIGHT = 120
-BUTTON_ROW_RATIO = 0.5            # each row takes half of bottom panel
+BUTTON_ROW_RATIO = 0.5
 
 # Always‑on‑top state
 always_on_top = False
@@ -65,15 +65,17 @@ def mouse_callback(event, x, y, flags, param):
                 if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
                     raw = hand_smoothed[hand_id][feature]
                     preset = PRESETS[hand_preset[hand_id]]
-                    norm_range = preset.norm_ranges.get(feature)
-                    if norm_range:
-                        norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
-                        value = normalize.midi_value(norm)
+                    norm_range = preset.feature_configs[feature]["norm_range"]
+                    norm = normalize.normalize_value(raw, norm_range[0], norm_range[1])
+                    value = normalize.midi_value(norm)
                 preset_idx = hand_preset[hand_id]
                 if preset_idx == 0:
                     return
                 preset = PRESETS[preset_idx]
-                base_ch, cc = preset.midi_map[feature]
+                midi_info = preset.feature_configs[feature]["midi"]
+                if midi_info is None:
+                    return
+                base_ch, cc = midi_info
                 hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
                 actual_ch = min(15, max(0, base_ch + hand_offset))
                 midi_out.send_cc(actual_ch, cc, value)
@@ -107,78 +109,57 @@ def _draw_hand_values(canvas, x_offset, y_offset, hand_id, hand_preset,
     y_pos = y_offset
     anything_drawn = False
 
-    # Helper to get normalized value
     def get_norm(feature):
         if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
-            rng = preset.norm_ranges.get(feature)
-            if rng:
-                return normalize.normalize_value(hand_smoothed[hand_id][feature],
-                                                 rng["min"], rng["max"])
+            rng = preset.feature_configs[feature]["norm_range"]
+            return normalize.normalize_value(hand_smoothed[hand_id][feature], rng[0], rng[1])
         return None
 
-    # 1. Show mapped CC values (for non-note presets)
-    for feature in preset.midi_map.keys():
+    # 1. Show all feature values (raw, normalised, and MIDI if mapped)
+    for feature in preset.features:
         if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
             raw = hand_smoothed[hand_id][feature]
             norm = get_norm(feature)
             if norm is None:
                 continue
-            midi_val = normalize.midi_value(norm)
-            text = f"{feature}: {raw:.2f} -> {midi_val}"
+            midi_info = preset.feature_configs[feature]["midi"]
+            if midi_info is not None:
+                midi_val = normalize.midi_value(norm)
+                text = f"{feature}: {raw:.2f} -> {midi_val}"
+            else:
+                text = f"{feature}: {raw:.2f} (norm {norm:.2f})"
             cv2.putText(canvas, text, (x_offset + 10, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 200, 200), 1)
             y_pos += int(20 * font_scale * 2)
             anything_drawn = True
 
-    # 2. Additional info for note presets
+    # 2. Note‑specific info (if preset has note_config)
     if preset.note_config is not None:
-        # palm_x → pitch bend
-        norm_x = get_norm('palm_x')
-        if norm_x is not None:
-            bend = int(round((norm_x - 0.5) * 16384))
-            bend = max(-8192, min(8191, bend))
-            text = f"palm_x: {hand_smoothed[hand_id]['palm_x']:.2f} -> bend={bend}"
-            cv2.putText(canvas, text, (x_offset + 10, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 200, 200), 1)
-            y_pos += int(20 * font_scale * 2)
-            anything_drawn = True
+        note_cfg = preset.note_config
+        # Show the three source features with their normalised values
+        for src in [note_cfg["note_source"], note_cfg["bend_source"], note_cfg["gate_source"]]:
+            if src in hand_smoothed[hand_id] and hand_smoothed[hand_id][src] is not None:
+                raw = hand_smoothed[hand_id][src]
+                norm = get_norm(src)
+                if norm is not None:
+                    text = f"{src}: {raw:.2f} (norm {norm:.2f})"
+                    cv2.putText(canvas, text, (x_offset + 10, y_pos),
+                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 200, 200), 1)
+                    y_pos += int(20 * font_scale * 2)
+                    anything_drawn = True
 
-        # palm_y → note (inverted)
-        norm_y = get_norm('palm_y')
-        if norm_y is not None:
-            note_min = preset.note_config['note_min']
-            note_max = preset.note_config['note_max']
-            note = int(round((1 - norm_y) * (note_max - note_min) + note_min))
-            note = max(0, min(127, note))
-            text = f"palm_y: {hand_smoothed[hand_id]['palm_y']:.2f} -> note={note}"
-            cv2.putText(canvas, text, (x_offset + 10, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 200, 200), 1)
-            y_pos += int(20 * font_scale * 2)
-            anything_drawn = True
-
-        # thumb_index_dist → gate
-        if 'thumb_index_dist' in hand_smoothed[hand_id] and hand_smoothed[hand_id]['thumb_index_dist'] is not None:
-            raw_dist = hand_smoothed[hand_id]['thumb_index_dist']
-            norm_dist = get_norm('thumb_index_dist')
-            if norm_dist is not None:
-                threshold = preset.note_config['threshold']
-                status = "ON" if raw_dist < threshold else "OFF"
-                text = f"spread: {raw_dist:.2f} -> {status} (thr={threshold:.2f})"
-                cv2.putText(canvas, text, (x_offset + 10, y_pos),
-                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 200, 200), 1)
-                y_pos += int(20 * font_scale * 2)
-                anything_drawn = True
-
-        # Note state (ON/OFF) and current bend value
+        # Display note state
         if note_state is not None and len(note_state) > hand_id:
             state = note_state[hand_id]
             if state['active']:
-                # Get current note and bend (recompute from smoothed)
-                norm_x_now = get_norm('palm_x')
-                bend_now = int(round((norm_x_now - 0.5) * 16384)) if norm_x_now is not None else 0
-                bend_now = max(-8192, min(8191, bend_now))
-                note_now = state['note'] if state['note'] is not None else '?'
-                text = f"Note ON  note={note_now}  bend={bend_now}"
+                # Get current bend value (re‑compute from smoothed source)
+                bend_src = note_cfg["bend_source"]
+                if bend_src in hand_smoothed[hand_id] and hand_smoothed[hand_id][bend_src] is not None:
+                    norm_bend = get_norm(bend_src)
+                    bend_now = int(round((norm_bend - 0.5) * 16384)) if norm_bend is not None else 0
+                else:
+                    bend_now = 0
+                text = f"Note ON  note={state['note']}  bend={bend_now}"
                 cv2.putText(canvas, text, (x_offset + 10, y_pos),
                             cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), 1)
             else:
@@ -195,7 +176,7 @@ def _draw_hand_values(canvas, x_offset, y_offset, hand_id, hand_preset,
 
     return y_pos
 
-
+# ----------------------------------------------------------------------
 def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
                      hand_preset, hand_smoothed, midi_status, font_scale=0.5,
                      note_state=None):
@@ -211,14 +192,13 @@ def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 0), 1)
 
     # Topmost toggle button (top‑right corner)
-    btn_size = int(panel_width * 0.1)   # 10% of panel width
-    btn_size = max(20, min(40, btn_size))  # clamp
+    btn_size = int(panel_width * 0.1)
+    btn_size = max(20, min(40, btn_size))
     btn_x = x_offset + panel_width - btn_size - 10
     btn_y = y_offset + 10
     color = (0, 255, 0) if always_on_top else (100, 100, 100)
     cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2), btn_size//2 - 2, color, -1)
     cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2), btn_size//2 - 2, (255, 255, 255), 1)
-    # Simple lock icon
     if always_on_top:
         cv2.line(canvas, (btn_x + btn_size//2, btn_y + 8), (btn_x + btn_size//2, btn_y + btn_size//2), (255,255,255), 2)
         cv2.circle(canvas, (btn_x + btn_size//2, btn_y + btn_size//2 + 4), 3, (255,255,255), -1)
@@ -335,8 +315,11 @@ def draw_mapper_overlay(canvas, w, h, hand_preset, hand_smoothed, font_scale=0.6
                     cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), 1)
 
         y = y_start
-        for feature in preset.midi_map.keys():
-            base_ch, cc = preset.midi_map[feature]
+        for feature in preset.features:
+            midi_info = preset.feature_configs[feature]["midi"]
+            if midi_info is None:
+                continue
+            base_ch, cc = midi_info
             hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
             actual_ch = min(15, max(0, base_ch + hand_offset))
             text = f"{feature} (ch{actual_ch+1} cc{cc})"

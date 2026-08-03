@@ -1,117 +1,97 @@
 # presets.py
 from hand_features import HandFeatures
 
+# Mapping from feature name to its extracting function
+FEATURE_FUNCS = {
+    "palm_x": HandFeatures.palm_x,
+    "palm_y": HandFeatures.palm_y,
+    "hand_pitch": HandFeatures.hand_pitch,
+    "hand_roll": HandFeatures.hand_roll,
+    "thumb_index_dist": HandFeatures.finger_spread,
+    "fist": HandFeatures.hand_fist,
+    "hand_scale": HandFeatures.hand_scale,
+}
+
 class Preset:
-    def __init__(self, name, features_func, midi_map, norm_ranges,
-                 filter_settings, deadband=0.01, mirror_left_hand=True,
-                 note_config=None):
+    def __init__(self, name, feature_configs, note_config=None, deadband=0.01, mirror_left_hand=True):
+        """
+        feature_configs: dict { feature_name: { "midi": (channel, cc) or None,
+                                                 "norm_range": (min, max),
+                                                 "filter": (min_cutoff, beta) } }
+        note_config: dict with keys: channel, note_min, note_max, threshold, timeout,
+                                     note_source, bend_source, gate_source
+        """
         self.name = name
-        self.features_func = features_func
-        self.midi_map = midi_map
-        self.norm_ranges = norm_ranges
-        self.filter_settings = filter_settings
+        self.feature_configs = feature_configs
+        self.features = list(feature_configs.keys())
+        self.note_config = note_config
         self.deadband = deadband
         self.mirror_left_hand = mirror_left_hand
-        self.note_config = note_config  # dict: {channel, note_min, note_max, threshold, timeout}
 
-def make_preset(name, method_name, midi_map, norm_ranges, filter_settings,
-                deadband=0.01, mirror_left_hand=True, note_config=None):
-    method = getattr(HandFeatures, method_name)
-    return Preset(name, method, midi_map, norm_ranges, filter_settings,
-                  deadband, mirror_left_hand, note_config)
+    def get_features(self, landmarks):
+        """Return a dict of raw feature values for all features in this preset."""
+        result = {}
+        for feature in self.features:
+            func = FEATURE_FUNCS[feature]
+            result.update(func(landmarks))
+        return result
 
+
+def feature_config(midi=None, norm_range=(0.0, 1.0), filter=(0.3, 0.1)):
+    """Helper to build a feature configuration dict."""
+    return {"midi": midi, "norm_range": norm_range, "filter": filter}
+
+
+# The preset list – now fully modular
 PRESETS = [
     # 0: Off
-    Preset("Off", lambda lm: {}, {}, {}, {}, deadband=0.01, mirror_left_hand=False),
+    Preset("Off", {}, note_config=None, deadband=0.01, mirror_left_hand=False),
 
     # 1: Pitch/Roll
-    make_preset(
-        name="Pitch/Roll",
-        method_name="hand_orientation",
-        midi_map={"hand_pitch": (1, 20), "hand_roll": (1, 21)},
-        norm_ranges={"hand_pitch": {"min": -70.0, "max": 50.0},
-                     "hand_roll": {"min": -100.0, "max": 180.0}},
-        filter_settings={"hand_pitch": {"min_cutoff": 0.5, "beta": 0.2},
-                         "hand_roll": {"min_cutoff": 0.5, "beta": 0.2}},
-        deadband=0.01,
-        mirror_left_hand=True,
-    ),
+    Preset("Pitch/Roll", {
+        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-70, 50), filter=(0.5, 0.2)),
+        "hand_roll": feature_config(midi=(1, 21), norm_range=(-100, 180), filter=(0.5, 0.2)),
+    }, note_config=None, deadband=0.01, mirror_left_hand=True),
 
     # 2: Position
-    make_preset(
-        name="Position",
-        method_name="palm_position",
-        midi_map={"palm_x": (2, 22), "palm_y": (2, 23)},
-        norm_ranges={"palm_x": {"min": 0.1, "max": 0.9},
-                     "palm_y": {"min": 0.1, "max": 0.9}},
-        filter_settings={"palm_x": {"min_cutoff": 0.3, "beta": 0.1},
-                         "palm_y": {"min_cutoff": 0.3, "beta": 0.1}},
-        deadband=0.015,
-        mirror_left_hand=False,
-    ),
+    Preset("Position", {
+        "palm_x": feature_config(midi=(2, 22), norm_range=(0.1, 0.9), filter=(0.3, 0.1)),
+        "palm_y": feature_config(midi=(2, 23), norm_range=(0.1, 0.9), filter=(0.3, 0.1)),
+    }, note_config=None, deadband=0.015, mirror_left_hand=False),
 
     # 3: Finger Spread
-    make_preset(
-        name="Finger Spread",
-        method_name="finger_spread",
-        midi_map={"thumb_index_dist": (3, 30)},
-        norm_ranges={"thumb_index_dist": {"min": 0.0, "max": 1.2}},
-        filter_settings={"thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
-        deadband=0.01,
-        mirror_left_hand=True,
-    ),
+    Preset("Finger Spread", {
+        "thumb_index_dist": feature_config(midi=(3, 30), norm_range=(0.0, 1.2), filter=(0.4, 0.15)),
+    }, note_config=None, deadband=0.01, mirror_left_hand=True),
 
     # 4: Fist
-    make_preset(
-        name="Fist",
-        method_name="hand_fist",
-        midi_map={"fist": (4, 40)},
-        norm_ranges={"fist": {"min": 0.0, "max": 1.0}},
-        filter_settings={"fist": {"min_cutoff": 0.3, "beta": 0.1}},
-        deadband=0.01,
-        mirror_left_hand=True,
-    ),
+    Preset("Fist", {
+        "fist": feature_config(midi=(4, 40), norm_range=(0.0, 1.0), filter=(0.3, 0.1)),
+    }, note_config=None, deadband=0.01, mirror_left_hand=True),
 
     # 5: Position + Spread
-    make_preset(
-        name="Pos+Spread",
-        method_name="position_and_spread",
-        midi_map={"palm_x": (2, 22), "palm_y": (2, 23), "thumb_index_dist": (3, 30)},
-        norm_ranges={"palm_x": {"min": 0.1, "max": 0.9},
-                     "palm_y": {"min": 0.1, "max": 0.9},
-                     "thumb_index_dist": {"min": 0.0, "max": 1.2}},
-        filter_settings={"palm_x": {"min_cutoff": 0.3, "beta": 0.1},
-                         "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
-                         "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15}},
-        deadband=0.015,
-        mirror_left_hand=False,
-    ),
+    Preset("Pos+Spread", {
+        "palm_x": feature_config(midi=(2, 22), norm_range=(0.1, 0.9), filter=(0.3, 0.1)),
+        "palm_y": feature_config(midi=(2, 23), norm_range=(0.1, 0.9), filter=(0.3, 0.1)),
+        "thumb_index_dist": feature_config(midi=(3, 30), norm_range=(0.0, 1.2), filter=(0.4, 0.15)),
+    }, note_config=None, deadband=0.015, mirror_left_hand=False),
 
-    # 6: Note Generator (NEW)
-    make_preset(
-        name="Note Gen",
-        method_name="position_spread_scale",  # new method
-        midi_map={"hand_scale": (1, 1)},  # CC 1 = mod wheel
-        norm_ranges={
-            "palm_x": {"min": 0.2, "max": 0.8},
-            "palm_y": {"min": 0.2, "max": 0.8},
-            "thumb_index_dist": {"min": 0.0, "max": 1.2},
-            "hand_scale": {"min": 0.1, "max": 0.25}  # adjust to your camera distance
-        },
-        filter_settings={
-            "palm_x": {"min_cutoff": 0.3, "beta": 0.1},
-            "palm_y": {"min_cutoff": 0.3, "beta": 0.1},
-            "thumb_index_dist": {"min_cutoff": 0.4, "beta": 0.15},
-            "hand_scale": {"min_cutoff": 0.2, "beta": 0.05}  # extra smoothing
-        },
-        deadband=0.015,
-        mirror_left_hand=False,
-        note_config={
-            "channel": 1,
-            "note_min": 12,
-            "note_max": 103,
-            "threshold": 0.3,
-            "timeout": 20.0
-        }
-    ),
+    # 6: Note Generator (modular)
+    Preset("Note Gen", {
+        # hand_scale is mapped to CC1 (mod wheel)
+        "hand_scale": feature_config(midi=(1, 1), norm_range=(0.1, 0.25), filter=(0.2, 0.05)),
+        # these features are used only for note generation – no direct MIDI CC
+        "palm_x": feature_config(midi=(2, 22), norm_range=(0.2, 0.8), filter=(0.3, 0.1)),
+        "palm_y": feature_config(midi=(2, 23), norm_range=(0.2, 0.8), filter=(0.3, 0.1)),
+        "thumb_index_dist": feature_config(midi=(2,24), norm_range=(0.0, 0.3), filter=(0.4, 0.15)),
+    }, note_config={
+        "channel": 1,
+        "note_min": 12,
+        "note_max": 103,
+        "threshold": 0.3,
+        "timeout": 20.0,
+        "note_source": "palm_y",
+        "bend_source": "palm_x",
+        "gate_source": "thumb_index_dist",
+    }, deadband=0.015, mirror_left_hand=False),
 ]

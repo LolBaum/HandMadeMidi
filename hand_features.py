@@ -1,7 +1,75 @@
+
 # hand_features.py
 import numpy as np
 
 class HandFeatures:
+
+    @staticmethod
+    def palm_x(landmarks):
+        middle_mcp = np.array(landmarks[9])
+        return {"palm_x": middle_mcp[0]}
+
+    @staticmethod
+    def palm_y(landmarks):
+        middle_mcp = np.array(landmarks[9])
+        return {"palm_y": middle_mcp[1]}
+
+    @staticmethod
+    def hand_pitch(landmarks):
+        wrist = np.array(landmarks[0])
+        middle_mcp = np.array(landmarks[9])
+        forward_vec = middle_mcp - wrist
+        norm = np.linalg.norm(forward_vec)
+        pitch = np.degrees(np.arcsin(forward_vec[2] / norm)) if norm > 1e-6 else 0.0
+        return {"hand_pitch": pitch}
+
+    @staticmethod
+    def hand_roll(landmarks):
+        index_mcp = np.array(landmarks[5])
+        pinky_mcp = np.array(landmarks[17])
+        width_vec = pinky_mcp - index_mcp
+        roll = np.degrees(np.arctan2(width_vec[1], width_vec[0]))
+        return {"hand_roll": roll}
+
+    @staticmethod
+    def finger_spread(landmarks):
+        wrist = np.array(landmarks[0])
+        thumb_tip = np.array(landmarks[4])
+        index_tip = np.array(landmarks[8])
+        middle_mcp = np.array(landmarks[9])
+        hand_scale = np.linalg.norm(middle_mcp - wrist)
+        if hand_scale < 1e-6:
+            return {"thumb_index_dist": 0.0}
+        raw_dist = np.linalg.norm(thumb_tip - index_tip)
+        norm_dist = raw_dist / hand_scale
+        return {"thumb_index_dist": norm_dist}
+
+    @staticmethod
+    def hand_fist(landmarks):
+        fingers = [
+            (8, 6, 5),
+            (12, 10, 9),
+            (16, 14, 13),
+            (20, 18, 17)
+        ]
+        total_curl = 0.0
+        for tip_idx, pip_idx, mcp_idx in fingers:
+            tip = np.array(landmarks[tip_idx])
+            pip = np.array(landmarks[pip_idx])
+            mcp = np.array(landmarks[mcp_idx])
+            v1 = pip - mcp
+            v2 = tip - pip
+            angle = np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6), -1.0, 1.0))
+            curl = np.clip(angle / np.pi, 0.0, 1.0)
+            total_curl += curl
+        return {"fist": total_curl / 4.0}
+
+    @staticmethod
+    def hand_scale(landmarks):
+        wrist = np.array(landmarks[0])
+        middle_mcp = np.array(landmarks[9])
+        scale = np.linalg.norm(middle_mcp - wrist)
+        return {"hand_scale": scale}
 
     @staticmethod
     def hand_orientation(landmarks):

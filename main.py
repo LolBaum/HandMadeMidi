@@ -31,14 +31,13 @@ STABILITY_THRESHOLD = 10   # frames before switching label
 # --- Mapper mode toggle ---
 mapper_mode = False
 
-# --- Note state per hand (extended for pitch bend) ---
-# At top of main()
+# --- Note state per hand ---
 hand_note_state = [
     {
         'active': False,
-        'note': None,          # the note number that was triggered (fixed)
+        'note': None,
         'start_time': 0.0,
-        'smoothed_bend': 0.0   # for exponential smoothing of pitch bend
+        'smoothed_bend': 0.0
     },
     {
         'active': False,
@@ -56,7 +55,6 @@ def update_hand_tracks(detected):
     """
     global hand_tracks, next_track_id
 
-    # Step 1: Match detected hands to existing tracks
     matched_indices = set()
     unmatched = []
 
@@ -73,12 +71,10 @@ def update_hand_tracks(detected):
                 best_dist = dist
                 best_idx = i
 
-        if best_idx != -1 and best_dist < 0.02:  # threshold ~2% of screen
-            # Match found
+        if best_idx != -1 and best_dist < 0.02:
             track = hand_tracks[best_idx]
             matched_indices.add(best_idx)
             track['position'] = (wx, wy)
-            # Label stability
             if track['label'] == label:
                 track['counter'] = 0
             else:
@@ -88,10 +84,8 @@ def update_hand_tracks(detected):
                     track['counter'] = 0
             track['age'] = 0
         else:
-            # No match → new track
             unmatched.append((label, wx, wy))
 
-    # Step 2: Create new tracks for unmatched detections
     for label, wx, wy in unmatched:
         new_track = {
             'id': next_track_id,
@@ -103,12 +97,10 @@ def update_hand_tracks(detected):
         hand_tracks.append(new_track)
         next_track_id += 1
 
-    # Step 3: Increment age and remove old tracks
     hand_tracks = [t for t in hand_tracks if t['age'] < MAX_AGE]
     for t in hand_tracks:
         t['age'] += 1
 
-    # Step 4: Return stable labels and positions
     return [(t['label'], t['position'][0], t['position'][1]) for t in hand_tracks]
 
 # ----------------------------------------------------------------------
@@ -117,31 +109,32 @@ def init_hand(hand_id):
     preset_idx = hand_preset[hand_id]
     preset = PRESETS[preset_idx]
     new_filters = {}
-    for feature, settings in preset.filter_settings.items():
+    for feature in preset.features:
+        settings = preset.feature_configs[feature]["filter"]
         new_filters[feature] = OneEuroFilter(
-            min_cutoff=settings["min_cutoff"] * config.GLOBAL_CUTOFF_MULTIPLIER,
-            beta=settings["beta"] * config.GLOBAL_BETA_MULTIPLIER
+            min_cutoff=settings[0] * config.GLOBAL_CUTOFF_MULTIPLIER,
+            beta=settings[1] * config.GLOBAL_BETA_MULTIPLIER
         )
     hand_filters[hand_id] = new_filters
-    hand_smoothed[hand_id] = {feature: None for feature in preset.filter_settings.keys()}
-    hand_last_midi[hand_id] = {feature: -1 for feature in preset.midi_map.keys()}
+    hand_smoothed[hand_id] = {feature: None for feature in preset.features}
+    hand_last_midi[hand_id] = {feature: -1 for feature in preset.features}
 
 def switch_preset(hand_id, preset_idx):
     """Change preset for a specific hand, turning off notes and resetting pitch bend."""
     old_preset = PRESETS[hand_preset[hand_id]]
     if old_preset.note_config is not None and hand_note_state[hand_id]['active']:
         send_note_off(hand_id, hand_note_state[hand_id]['note'])
-        send_pitch_bend(hand_id, 0)          # reset bend
+        send_pitch_bend(hand_id, 0)
         hand_note_state[hand_id]['active'] = False
         hand_note_state[hand_id]['note'] = None
-        hand_note_state[hand_id]['base_note'] = None
-        hand_note_state[hand_id]['base_y'] = None
         hand_note_state[hand_id]['start_time'] = 0.0
+        hand_note_state[hand_id]['smoothed_bend'] = 0.0
 
     if preset_idx < 0 or preset_idx >= len(PRESETS):
         return
     hand_preset[hand_id] = preset_idx
     init_hand(hand_id)
+
 # ----------------------------------------------------------------------
 def send_note_on(hand_id, note, velocity=100):
     """Send a note-on message for a hand using its channel offset."""
@@ -174,10 +167,7 @@ def send_note_off(hand_id, note):
     print(f"Note OFF: hand{hand_id} ch{channel+1} note{note}")
 
 def send_pitch_bend(hand_id, bend_value):
-    """
-    Send a pitch bend message on the hand's MIDI channel.
-    bend_value: -8192 .. 8191  (0 = center/no bend)
-    """
+    """Send a pitch bend message on the hand's MIDI channel."""
     global midi_out
     if midi_out is None or not midi_out.port:
         return
@@ -187,7 +177,6 @@ def send_pitch_bend(hand_id, bend_value):
     base_ch = preset.note_config['channel']
     hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
     channel = min(15, max(0, base_ch + hand_offset))
-    # Clamp to valid range
     bend_value = int(round(bend_value))
     bend_value = max(-8192, min(8191, bend_value))
     msg = mido.Message('pitchwheel', channel=channel, pitch=bend_value)
@@ -202,9 +191,8 @@ def note_cleanup():
             send_pitch_bend(hand_id, 0)
             hand_note_state[hand_id]['active'] = False
             hand_note_state[hand_id]['note'] = None
-            hand_note_state[hand_id]['base_note'] = None
-            hand_note_state[hand_id]['base_y'] = None
             hand_note_state[hand_id]['start_time'] = 0.0
+            hand_note_state[hand_id]['smoothed_bend'] = 0.0
 
 # ----------------------------------------------------------------------
 def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
@@ -217,7 +205,7 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
     # ---- Draw hand skeleton ----
     if hand_id == 0:  # left hand → light blue
         connection_spec = vision.drawer.DrawingSpec(
-            color=(255, 200, 150),   # light blue (BGR)
+            color=(255, 200, 150),
             thickness=2,
             circle_radius=2
         )
@@ -253,14 +241,14 @@ def process_hand(hand_id, hand_landmarks, frame, w, h, vision):
     for lm in hand_landmarks.landmark:
         landmarks.append((lm.x, lm.y, lm.z))
 
-    # ---- Mirror left hand only if the preset allows it ----
+    # ---- Mirror left hand if preset allows ----
     if hand_id == 0 and preset.mirror_left_hand:
         landmarks = [(1.0 - x, y, z) for (x, y, z) in landmarks]
 
-    # ---- Feature extraction ----
-    raw_features = preset.features_func(landmarks)
+    # ---- Extract all features defined in this preset ----
+    raw_features = preset.get_features(landmarks)
 
-    # Update filters
+    # ---- Update filters for each feature ----
     for feature, raw_value in raw_features.items():
         if feature in hand_filters[hand_id]:
             hand_smoothed[hand_id][feature] = hand_filters[hand_id][feature].update(raw_value)
@@ -361,7 +349,33 @@ def main():
                         process_hand(hand_id, lm, frame, w, h, vision)
                         processed_ids.add(hand_id)
 
-            # ---- Note generation (preset 6) ----
+            # ---- Send MIDI CC messages (for features with midi mapping) ----
+            messages_to_send = []
+            for hand_id in (0, 1):
+                preset_idx = hand_preset[hand_id]
+                if preset_idx == 0:
+                    continue
+                preset = PRESETS[preset_idx]
+                hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+                for feature in preset.features:
+                    midi_info = preset.feature_configs[feature]["midi"]
+                    if midi_info is None:
+                        continue
+                    base_ch, cc = midi_info
+                    if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
+                        raw = hand_smoothed[hand_id][feature]
+                        norm_range = preset.feature_configs[feature]["norm_range"]
+                        norm = normalize.normalize_value(raw, norm_range[0], norm_range[1])
+                        midi_val = normalize.midi_value(norm)
+                        if abs(midi_val - hand_last_midi[hand_id].get(feature, -1)) > preset.deadband * 127:
+                            actual_channel = min(15, max(0, base_ch + hand_offset))
+                            messages_to_send.append((actual_channel, cc, midi_val))
+                            hand_last_midi[hand_id][feature] = midi_val
+
+            if messages_to_send:
+                midi_out.send_messages(messages_to_send)
+
+            # ---- Note generation (if preset has note_config) ----
             current_time = time.time()
             for hand_id in (0, 1):
                 preset_idx = hand_preset[hand_id]
@@ -371,66 +385,63 @@ def main():
                 if preset.note_config is None:
                     continue
 
-                # Need smoothed values for palm_x, palm_y, and thumb_index_dist
+                note_cfg = preset.note_config
+                note_source = note_cfg["note_source"]
+                bend_source = note_cfg["bend_source"]
+                gate_source = note_cfg["gate_source"]
+
+                # Ensure we have smoothed values for all required sources
                 if any(f not in hand_smoothed[hand_id] or hand_smoothed[hand_id][f] is None
-                       for f in ('palm_x', 'palm_y', 'thumb_index_dist')):
+                       for f in (note_source, bend_source, gate_source)):
                     continue
 
-                # Get normalized values
-                norm_x = normalize.normalize_value(
-                    hand_smoothed[hand_id]['palm_x'],
-                    preset.norm_ranges['palm_x']['min'],
-                    preset.norm_ranges['palm_x']['max']
-                )
-                norm_y = normalize.normalize_value(
-                    hand_smoothed[hand_id]['palm_y'],
-                    preset.norm_ranges['palm_y']['min'],
-                    preset.norm_ranges['palm_y']['max']
-                )
-                dist = hand_smoothed[hand_id]['thumb_index_dist']
+                # Get raw smoothed values
+                note_raw = hand_smoothed[hand_id][note_source]
+                bend_raw = hand_smoothed[hand_id][bend_source]
+                gate_raw = hand_smoothed[hand_id][gate_source]
 
-                # Compute the note that WOULD be triggered (for capture only)
-                note_min = preset.note_config['note_min']
-                note_max = preset.note_config['note_max']
+                # Normalise using each feature's own range
+                norm_range_note = preset.feature_configs[note_source]["norm_range"]
+                norm_y = normalize.normalize_value(note_raw, norm_range_note[0], norm_range_note[1])
+
+                norm_range_bend = preset.feature_configs[bend_source]["norm_range"]
+                norm_x = normalize.normalize_value(bend_raw, norm_range_bend[0], norm_range_bend[1])
+
+                # dist (gate) – threshold is compared to raw gate value
+                dist = gate_raw
+
+                note_min = note_cfg["note_min"]
+                note_max = note_cfg["note_max"]
                 candidate_note = int(round((1 - norm_y) * (note_max - note_min) + note_min))
                 candidate_note = max(0, min(127, candidate_note))
 
-                # Pitch bend from palm_x: 0..1 → -8192..8191 (raw)
                 raw_bend = (norm_x - 0.5) * 16384
                 raw_bend = max(-8192, min(8191, raw_bend))
 
-                threshold = preset.note_config['threshold']
-                timeout = preset.note_config['timeout']
+                threshold = note_cfg["threshold"]
+                timeout = note_cfg["timeout"]
                 state = hand_note_state[hand_id]
 
-                # ---- State machine (monophonic, fixed note) ----
                 if not state['active'] and dist < threshold:
-                    # Trigger note-on with the current candidate note (captured now)
                     send_note_on(hand_id, candidate_note)
                     state['active'] = True
-                    state['note'] = candidate_note  # fixed note for the whole gesture
+                    state['note'] = candidate_note
                     state['start_time'] = current_time
                     state['smoothed_bend'] = raw_bend
                     send_pitch_bend(hand_id, int(round(state['smoothed_bend'])))
-
                 elif state['active'] and dist >= threshold:
-                    # Note-off
                     send_note_off(hand_id, state['note'])
-                    send_pitch_bend(hand_id, 0)  # reset bend
+                    send_pitch_bend(hand_id, 0)
                     state['active'] = False
                     state['note'] = None
                     state['start_time'] = 0.0
                     state['smoothed_bend'] = 0.0
-
                 elif state['active']:
-                    # Note held – update pitch bend (smoothed) and mod wheel (already in CC loop)
-                    alpha = 0.2  # smoothing factor for bend
+                    alpha = 0.2
                     state['smoothed_bend'] = alpha * raw_bend + (1 - alpha) * state['smoothed_bend']
                     bend_smoothed = int(round(state['smoothed_bend']))
                     bend_smoothed = max(-8192, min(8191, bend_smoothed))
                     send_pitch_bend(hand_id, bend_smoothed)
-
-                    # Timeout check
                     if (current_time - state['start_time']) > timeout:
                         send_note_off(hand_id, state['note'])
                         send_pitch_bend(hand_id, 0)
@@ -439,7 +450,7 @@ def main():
                         state['start_time'] = 0.0
                         state['smoothed_bend'] = 0.0
 
-            # ---- Build the combined canvas (dynamic resizing) ----
+            # ---- Build the combined canvas ----
             try:
                 rect = cv2.getWindowImageRect(window_name)
                 win_w, win_h = rect[2], rect[3]
@@ -453,7 +464,6 @@ def main():
             camera_w = win_w - right_panel_w
             camera_h = win_h - bottom_panel_h
 
-            # Resize the drawn frame to fit camera area (preserve aspect)
             aspect = w / h
             if camera_w / camera_h > aspect:
                 new_h = camera_h
@@ -465,11 +475,9 @@ def main():
             y_offset = (camera_h - new_h) // 2
             frame_resized = cv2.resize(frame, (new_w, new_h))
 
-            # Create final canvas
             canvas = np.full((win_h, win_w, 3), 30, dtype=np.uint8)
             canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = frame_resized
 
-            # ---- Draw UI panels ----
             font_scale = min(win_w, win_h) / 1200.0
             midi_status = "MIDI: Active" if midi_out.port else "MIDI: Not connected"
             ui.draw_right_panel(canvas, camera_w, 0, right_panel_w, camera_h,
@@ -486,30 +494,6 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), 1)
             cv2.putText(canvas, "0-9: LEFT preset | Shift+0-9: RIGHT preset",
                         (10, win_h - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), 1)
-
-            # ---- Send MIDI CC messages (all non-note presets) ----
-            messages_to_send = []
-            for hand_id in (0, 1):
-                preset_idx = hand_preset[hand_id]
-                if preset_idx == 0:
-                    continue
-                preset = PRESETS[preset_idx]
-                hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
-                for feature, (base_channel, cc) in preset.midi_map.items():
-                    if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
-                        raw = hand_smoothed[hand_id][feature]
-                        norm_range = preset.norm_ranges.get(feature)
-                        if norm_range is None:
-                            continue
-                        norm = normalize.normalize_value(raw, norm_range["min"], norm_range["max"])
-                        midi_val = normalize.midi_value(norm)
-                        if abs(midi_val - hand_last_midi[hand_id].get(feature, -1)) > preset.deadband * 127:
-                            actual_channel = min(15, max(0, base_channel + hand_offset))
-                            messages_to_send.append((actual_channel, cc, midi_val))
-                            hand_last_midi[hand_id][feature] = midi_val
-
-            if messages_to_send:
-                midi_out.send_messages(messages_to_send)
 
             # ---- Show ----
             cv2.imshow(window_name, canvas)
@@ -530,16 +514,16 @@ def main():
                     switch_preset(0, idx)
             # Right hand: Shift+number (symbols)
             shift_map = {
-                33: 1,  # !  (Shift+1)
-                34: 2,  # "  (Shift+2)
-                167: 3,  # §  (Shift+3)
-                36: 4,  # $  (Shift+4)
-                37: 5,  # %  (Shift+5)
-                38: 6,  # &  (Shift+6)
-                47: 7,  # /  (Shift+7)
-                40: 8,  # (  (Shift+8)
-                41: 9,  # )  (Shift+9)
-                61: 0,  # =  (Shift+0)
+                33: 1,  # !
+                34: 2,  # "
+                167: 3, # §
+                36: 4,  # $
+                37: 5,  # %
+                38: 6,  # &
+                47: 7,  # /
+                40: 8,  # (
+                41: 9,  # )
+                61: 0,  # =
             }
             if key in shift_map:
                 idx = shift_map[key]
@@ -547,7 +531,6 @@ def main():
                     switch_preset(1, idx)
 
     finally:
-        # Cleanup: turn off all notes and release resources
         note_cleanup()
         vision.release()
         midi_out.close()
