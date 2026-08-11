@@ -4,6 +4,22 @@
 It turns your webcam into a musical instrument – no gloves, no markers, just your hands.  
 Designed for sound artists, performers, and tinkerers who want to sculpt sound with movement.
 
+> _This project is released under the MIT License – which means you can use, modify, copy, and distribute this code for any purpose (including commercial). The only rule is that you keep this license notice somewhere. Think of it as 'CC‑BY for software'._
+---
+
+## 📖 Table of Contents
+- [Features](#-features)
+- [System Requirements](#-system-requirements)
+- [Installation](#-installation)
+- [How to Use](#-how-to-use)
+- [Configuring Presets](#-configuring-presets-yaml)
+- [Adding New Features](#-adding-new-features--input-methods)
+- [Ableton Live Integration](#-ableton-live-integration)
+- [Troubleshooting](#-troubleshooting)
+- [Todo List](#-todo-list)
+- [Repository Contents](#-repository-contents)
+- [License & Credits](#-license--credits)
+
 ---
 
 ## ✨ Features
@@ -165,15 +181,15 @@ If you want to use a completely different input (e.g., face landmarks, OSC, or s
 
 ---
 
-## 🎛️ Ableton Live Integration (Max for Live)
+🎛️ Ableton Live Integration
+The app works out‑of‑the‑box with any MIDI‑learnable parameter.
 
-The app works out‑of‑the‑box with any MIDI‑learnable parameter. For a streamlined experience, we recommend the **CC Param Control 3.0** Max for Live device:
+For a convenient mapping experience, you can use the [CC Param Control Bank 3.0](maxforlive.com/library/device/3186) Max for Live device.
+It offers 128 assignable knobs that can be mapped to any device parameter, each corresponding to a MIDI CC (0‑127).
+Set the MIDI input to the virtual port created by the app and start tweaking.
 
-- It offers 128 knobs that can be mapped to any device parameter.
-- Each knob corresponds to a MIDI CC (0‑127), matching the numbers used in your presets.
-- Set the MIDI input to the virtual port created by the app and start tweaking.
+💡 This is one of several tools that work well – feel free to explore other MIDI‑mapping solutions that fit your workflow.
 
-You can find the device on the Ableton forum or ask the community for a copy.
 
 ---
 
@@ -185,6 +201,19 @@ You can find the device on the Ableton forum or ask the community for a copy.
 | No MIDI port found | Install loopMIDI (Windows) or use the built‑in IAC driver (macOS). |
 | Hand detection is laggy | Reduce camera resolution in `vision.py` or lower `model_complexity`. |
 | Presets don’t load | Ensure `presets.yaml` is valid YAML. Use an online validator. |
+
+---
+
+📋 Todo List
+- [ ] Add hot‑reload for presets.yaml (no restart needed)
+- [ ] Improve performance for lower‑end machines
+- [ ] Implement OSC output as an alternative to MIDI
+- [ ] Implement MPE output as an alternative to MIDI
+- [ ] Add more hand features (e.g., hand_yaw, individual finger curls)
+- [ ] Support for face landmarks and body pose
+- [ ] Create a simple GUI for preset editing
+- [ ] Add support for multiple camera inputs
+- [ ] Record and playback gesture sequences
 
 ---
 
