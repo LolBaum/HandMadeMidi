@@ -304,7 +304,7 @@ class UIRenderer:
         num_presets = len(PRESETS)
         margin = int(10 * 0.6 * 2)  # approximate scale – we'll use font_scale later
         # We need a font scale based on panel size
-        font_scale = min(w, h) / 800.0
+        font_scale = min(w, h) / 300.0
         margin = int(10 * font_scale * 2)
         available_width = w - 2 * margin
         button_width = available_width // num_presets

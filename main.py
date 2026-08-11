@@ -4,6 +4,7 @@ import numpy as np
 import time
 import mido
 
+from layout import build_canvas
 from midi_cc import MidiCCProcessor
 from note_engine import NoteEngine
 from tracker import HandTracker
@@ -467,8 +468,6 @@ class MotionControllerApp:
     def run(self):
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.window_name, 1280, 720)
-
-        # Set mouse callback to the UI's handler
         cv2.setMouseCallback(self.window_name, self.ui.handle_click)
 
         try:
@@ -477,40 +476,13 @@ class MotionControllerApp:
                 if frame is None:
                     break
 
-                # ---- Process frame (tracking, MIDI, notes) ----
+                # Process frame (tracking, MIDI, notes)
                 frame = self._process_frame(frame, results)
 
-                # ---- Build the combined canvas ----
-                h, w = frame.shape[:2]
-                try:
-                    rect = cv2.getWindowImageRect(self.window_name)
-                    win_w, win_h = rect[2], rect[3]
-                except cv2.error as e:
-                    win_w, win_h = 1280, 720
-                    print('error', e, f'defaulting to fallback: ({win_w}, {win_h})')
-                win_w = max(win_w, 600)
-                win_h = max(win_h, 400)
+                # Build the canvas (camera + layout)
+                canvas = build_canvas(frame, self.window_name)
 
-                right_panel_w = max(ui.MIN_RIGHT_PANEL_WIDTH, int(win_w * ui.RIGHT_PANEL_RATIO))
-                bottom_panel_h = max(ui.MIN_BOTTOM_PANEL_HEIGHT, int(win_h * ui.BOTTOM_PANEL_RATIO))
-                camera_w = win_w - right_panel_w
-                camera_h = win_h - bottom_panel_h
-
-                aspect = w / h
-                if camera_w / camera_h > aspect:
-                    new_h = camera_h
-                    new_w = int(new_h * aspect)
-                else:
-                    new_w = camera_w
-                    new_h = int(new_w / aspect)
-                x_offset = (camera_w - new_w) // 2
-                y_offset = (camera_h - new_h) // 2
-                frame_resized = cv2.resize(frame, (new_w, new_h))
-
-                canvas = np.full((win_h, win_w, 3), 30, dtype=np.uint8)
-                canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = frame_resized
-
-                # ---- Build UI state and draw ----
+                # Build UI state and draw overlays
                 midi_status = "MIDI: Active" if self.midi_out.port else "MIDI: Not connected"
                 ui_state = {
                     'hand_preset': self.hand_preset,
@@ -521,24 +493,24 @@ class MotionControllerApp:
                 }
                 self.ui.draw(canvas, ui_state)
 
-                # ---- Show the canvas ----
                 cv2.imshow(self.window_name, canvas)
 
-                # ---- Keyboard handling ----
+                # Keyboard handling
                 key = cv2.waitKey(1) & 0xFF
-                if key == 27:  # ESC
+                if key == 27:
                     break
                 if key == ord('m'):
                     self.mapper_mode = not self.mapper_mode
-                    # The UI will clear its internal mapper rects automatically on next draw
                     continue
-                # Left hand: number keys 0-9
+
+                # ---- Left hand: number keys 0-9 ----
                 if 48 <= key <= 57:
                     idx = key - 48
                     if idx < len(PRESETS):
                         self.switch_preset(0, idx)
                     continue
-                # Right hand: Shift+number (symbols)
+
+                # ---- Right hand: Shift+number (symbols) ----
                 shift_map = {
                     33: 1,  # !
                     34: 2,  # "
