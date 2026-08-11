@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import time
 import mido
+from tracker import HandTracker
 from vision import Vision
 from filters import OneEuroFilter
 from midi_output import MidiOutput
@@ -20,10 +21,11 @@ class MotionControllerApp:
         self.hand_smoothed = [{}, {}]
         self.hand_last_midi = [{}, {}]
 
-        self.hand_tracks = []
-        self.next_track_id = 0
-        self.MAX_AGE = 20
-        self.STABILITY_THRESHOLD = 10
+        self.tracker = HandTracker(
+            match_distance=0.02,
+            max_age=20,
+            stability_threshold=10
+        )
 
         self.hand_note_state = [
             {'active': False, 'note': None, 'start_time': 0.0, 'smoothed_bend': 0.0},
@@ -50,62 +52,6 @@ class MotionControllerApp:
 
     def _setup_midi(self):
         self.midi_out = MidiOutput(port_name=config.MIDI_PORT_NAME)
-
-    # ------------------------------------------------------------------
-    # Hand / Preset management (converted from globals)
-    # ------------------------------------------------------------------
-    def _update_hand_tracks(self, detected):
-        """
-        detected: list of (label, wx, wy)
-        Returns a list of stable (label, wx, wy)
-        """
-        matched_indices = set()
-        unmatched = []
-
-        for label, wx, wy in detected:
-            best_idx = -1
-            best_dist = float('inf')
-            for i, track in enumerate(self.hand_tracks):
-                if i in matched_indices:
-                    continue
-                dx = wx - track['position'][0]
-                dy = wy - track['position'][1]
-                dist = dx*dx + dy*dy
-                if dist < best_dist:
-                    best_dist = dist
-                    best_idx = i
-
-            if best_idx != -1 and best_dist < 0.02:
-                track = self.hand_tracks[best_idx]
-                matched_indices.add(best_idx)
-                track['position'] = (wx, wy)
-                if track['label'] == label:
-                    track['counter'] = 0
-                else:
-                    track['counter'] += 1
-                    if track['counter'] >= self.STABILITY_THRESHOLD:
-                        track['label'] = label
-                        track['counter'] = 0
-                track['age'] = 0
-            else:
-                unmatched.append((label, wx, wy))
-
-        for label, wx, wy in unmatched:
-            new_track = {
-                'id': self.next_track_id,
-                'label': label,
-                'position': (wx, wy),
-                'counter': 0,
-                'age': 0
-            }
-            self.hand_tracks.append(new_track)
-            self.next_track_id += 1
-
-        self.hand_tracks = [t for t in self.hand_tracks if t['age'] < self.MAX_AGE]
-        for t in self.hand_tracks:
-            t['age'] += 1
-
-        return [(t['label'], t['position'][0], t['position'][1]) for t in self.hand_tracks]
 
     def _init_hand(self, hand_id):
         """(Re‑)initialize filters and caches for a hand based on its current preset."""
@@ -300,7 +246,7 @@ class MotionControllerApp:
 
         # ---- 2. Update tracker ----
         detected_positions = [(label, lm.landmark[0].x, lm.landmark[0].y) for label, lm in detected_hands]
-        stable_hands = self._update_hand_tracks(detected_positions)
+        stable_hands = self.tracker.update(detected_positions)
 
         # ---- 3. Process each hand (draws on frame) ----
         processed_ids = set()
