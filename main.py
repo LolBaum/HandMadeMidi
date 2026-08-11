@@ -42,16 +42,57 @@ class MotionControllerApp:
         self.vision = None
         self.window_name = "Motion Controller"
 
-        # ---- Initialisation ----
+        self.ui = ui.UIRenderer(
+            window_name=self.window_name,
+            on_preset_switch=self.switch_preset,
+            on_toggle_topmost=self._toggle_topmost,
+            on_mapper_send=self._send_mapper_cc
+        )
+
+        # ---- Initialisation (after UI) ----
         self._setup_vision()
         self._setup_midi()
         for hand_id in (0, 1):
             self._init_hand(hand_id)
-        ui.init_ui()
 
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
+    # Add a method for topmost toggle
+    def _toggle_topmost(self):
+        """Callback from UI to toggle topmost window property."""
+        try:
+            cv2.setWindowProperty(self.window_name, cv2.WND_PROP_TOPMOST,
+                                  1 if self.ui._topmost else 0)
+        except cv2.error as e:
+            print('error', e)
+
+    # Add a method for mapper send
+    def _send_mapper_cc(self, hand_id, feature):
+        """Callback from UI: send the current MIDI value for a feature."""
+        preset_idx = self.hand_preset[hand_id]
+        if preset_idx == 0:
+            return
+        preset = PRESETS[preset_idx]
+        midi_info = preset.feature_configs[feature]["midi"]
+        if midi_info is None:
+            return
+        base_ch, cc = midi_info
+        hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+        actual_ch = min(15, max(0, base_ch + hand_offset))
+
+        # Get current value
+        if feature in self.hand_smoothed[hand_id] and self.hand_smoothed[hand_id][feature] is not None:
+            raw = self.hand_smoothed[hand_id][feature]
+            norm_range = preset.feature_configs[feature]["norm_range"]
+            norm = normalize.normalize_value(raw, norm_range[0], norm_range[1])
+            value = normalize.midi_value(norm)
+        else:
+            value = 64  # fallback
+
+        self.midi_out.send_cc(actual_ch, cc, value)
+        print(f"Mapper: hand{hand_id} {feature} -> ch{actual_ch + 1} cc{cc} val{value}")
+
     def _setup_vision(self):
         self.vision = Vision(camera_index=config.CAMERA_INDEX)
 
@@ -427,16 +468,8 @@ class MotionControllerApp:
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.window_name, 1280, 720)
 
-        # Mouse callback (still uses ui.py, we pass the needed references)
-        callback_params = {
-            'hand_preset': self.hand_preset,
-            'hand_smoothed': self.hand_smoothed,
-            'midi_out': self.midi_out,
-            'mapper_mode': lambda: self.mapper_mode,
-            'switch_preset': self.switch_preset,
-            'window_name': self.window_name
-        }
-        cv2.setMouseCallback(self.window_name, ui.mouse_callback, param=callback_params)
+        # Set mouse callback to the UI's handler
+        cv2.setMouseCallback(self.window_name, self.ui.handle_click)
 
         try:
             while True:
@@ -447,7 +480,7 @@ class MotionControllerApp:
                 # ---- Process frame (tracking, MIDI, notes) ----
                 frame = self._process_frame(frame, results)
 
-                # ---- Build the combined canvas (UI overlay) ----
+                # ---- Build the combined canvas ----
                 h, w = frame.shape[:2]
                 try:
                     rect = cv2.getWindowImageRect(self.window_name)
@@ -475,31 +508,53 @@ class MotionControllerApp:
                 frame_resized = cv2.resize(frame, (new_w, new_h))
 
                 canvas = np.full((win_h, win_w, 3), 30, dtype=np.uint8)
-                canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = frame_resized
+                canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = frame_resized
 
-                font_scale = min(win_w, win_h) / 1200.0
+                # ---- Build UI state and draw ----
                 midi_status = "MIDI: Active" if self.midi_out.port else "MIDI: Not connected"
-                ui.draw_right_panel(canvas, camera_w, 0, right_panel_w, camera_h,
-                                    self.hand_preset, self.hand_smoothed, midi_status, font_scale,
-                                    note_state=self.hand_note_state)
-                ui.draw_bottom_panel(canvas, 0, camera_h, win_w, bottom_panel_h,
-                                     self.hand_preset, font_scale)
+                ui_state = {
+                    'hand_preset': self.hand_preset,
+                    'hand_smoothed': self.hand_smoothed,
+                    'hand_note_state': self.hand_note_state,
+                    'midi_status': midi_status,
+                    'mapper_mode': self.mapper_mode,
+                }
+                self.ui.draw(canvas, ui_state)
 
-                if self.mapper_mode:
-                    ui.draw_mapper_overlay(canvas, win_w, win_h, self.hand_preset, self.hand_smoothed, font_scale)
-
-                # Shortcut hints
-                cv2.putText(canvas, "Press 'm' for MIDI Mapper Mode", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), 1)
-                cv2.putText(canvas, "0-9: LEFT preset | Shift+0-9: RIGHT preset",
-                            (10, win_h - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), 1)
-
+                # ---- Show the canvas ----
                 cv2.imshow(self.window_name, canvas)
 
                 # ---- Keyboard handling ----
                 key = cv2.waitKey(1) & 0xFF
-                if not self._handle_key(key):
+                if key == 27:  # ESC
                     break
+                if key == ord('m'):
+                    self.mapper_mode = not self.mapper_mode
+                    # The UI will clear its internal mapper rects automatically on next draw
+                    continue
+                # Left hand: number keys 0-9
+                if 48 <= key <= 57:
+                    idx = key - 48
+                    if idx < len(PRESETS):
+                        self.switch_preset(0, idx)
+                    continue
+                # Right hand: Shift+number (symbols)
+                shift_map = {
+                    33: 1,  # !
+                    34: 2,  # "
+                    167: 3,  # §
+                    36: 4,  # $
+                    37: 5,  # %
+                    38: 6,  # &
+                    47: 7,  # /
+                    40: 8,  # (
+                    41: 9,  # )
+                    61: 0,  # =
+                }
+                if key in shift_map:
+                    idx = shift_map[key]
+                    if idx < len(PRESETS):
+                        self.switch_preset(1, idx)
 
         finally:
             self._note_cleanup()
