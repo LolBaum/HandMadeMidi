@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import time
 import mido
+
+from note_engine import NoteEngine
 from tracker import HandTracker
 from vision import Vision
 from filters import OneEuroFilter
@@ -31,6 +33,7 @@ class MotionControllerApp:
             {'active': False, 'note': None, 'start_time': 0.0, 'smoothed_bend': 0.0},
             {'active': False, 'note': None, 'start_time': 0.0, 'smoothed_bend': 0.0}
         ]
+        self.note_engine = NoteEngine(alpha=0.2, state=self.hand_note_state)
 
         self.mapper_mode = False
         self.midi_out = None
@@ -68,20 +71,27 @@ class MotionControllerApp:
         self.hand_smoothed[hand_id] = {feature: None for feature in preset.features}
         self.hand_last_midi[hand_id] = {feature: -1 for feature in preset.features}
 
-    def switch_preset(self, hand_id, preset_idx):
-        """Change preset for a specific hand, turning off notes and resetting pitch bend."""
-        old_preset = PRESETS[self.hand_preset[hand_id]]
-        if old_preset.note_config is not None and self.hand_note_state[hand_id]['active']:
-            self._send_note_off(hand_id, self.hand_note_state[hand_id]['note'])
-            self._send_pitch_bend(hand_id, 0)
-            self.hand_note_state[hand_id]['active'] = False
-            self.hand_note_state[hand_id]['note'] = None
-            self.hand_note_state[hand_id]['start_time'] = 0.0
-            self.hand_note_state[hand_id]['smoothed_bend'] = 0.0
+    def switch_preset(self, hand_id: int, preset_idx: int) -> None:
+        """
+        Change preset for a specific hand, turning off any active note
+        and resetting filters and MIDI state.
+        """
+        # 1. Stop any active note for this hand
+        actions = self.note_engine.stop(hand_id)  # returns actions to turn off note and bend
+        for action in actions:
+            if action[0] == 'note_off':
+                _, hand, note = action
+                self._send_note_off(hand, note)
+            elif action[0] == 'pitch_bend':
+                _, hand, bend = action
+                self._send_pitch_bend(hand, bend)
 
+        # 2. Update preset index
         if preset_idx < 0 or preset_idx >= len(PRESETS):
             return
         self.hand_preset[hand_id] = preset_idx
+
+        # 3. Re-initialize filters and smoothed values for this hand
         self._init_hand(hand_id)
 
     # ------------------------------------------------------------------
@@ -128,15 +138,14 @@ class MotionControllerApp:
         self.midi_out.port.send(msg)
 
     def _note_cleanup(self):
-        for hand_id in (0, 1):
-            if self.hand_note_state[hand_id]['active']:
-                note = self.hand_note_state[hand_id]['note']
-                self._send_note_off(hand_id, note)
-                self._send_pitch_bend(hand_id, 0)
-                self.hand_note_state[hand_id]['active'] = False
-                self.hand_note_state[hand_id]['note'] = None
-                self.hand_note_state[hand_id]['start_time'] = 0.0
-                self.hand_note_state[hand_id]['smoothed_bend'] = 0.0
+        actions = self.note_engine.cleanup()
+        for action in actions:
+            if action[0] == 'note_off':
+                _, hand, note = action
+                self._send_note_off(hand, note)
+            elif action[0] == 'pitch_bend':
+                _, hand, bend = action
+                self._send_pitch_bend(hand, bend)
 
     # ------------------------------------------------------------------
     # Per‑hand processing (drawing & filtering)
