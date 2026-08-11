@@ -1,8 +1,219 @@
-- use Mediapipline <= 0.10.30 otherwise mp.solutions is not available
-- use python <= 3.11.9
-```
-I hate AI! I hate AI! I hate AI!
+# Gesture → MIDI Controller  
 
+**This is a real‑time hand‑gesture to MIDI translator.**  
+It turns your webcam into a musical instrument – no gloves, no markers, just your hands.  
+Designed for sound artists, performers, and tinkerers who want to sculpt sound with movement.
+
+---
+
+## ✨ Features
+
+- **Two‑hand tracking** – left and right hands independently control different MIDI parameters.
+- **Modular presets** – combine any hand feature (pitch, roll, fist, spread, position, scale) into a custom mapping.
+- **Smooth & responsive** – One‑Euro filter eliminates jitter while preserving fast motion.
+- **Note generation** – use finger distance as a gate to trigger MIDI notes with pitch‑bend.
+- **MIDI mapper mode** – click any mapped feature to send its current value – perfect for learning CC numbers in Ableton.
+- **Persistent topmost window** – keep the controller visible over your DAW.
+- **Human‑editable configuration** – all presets are defined in a simple YAML file. No coding required to change mappings or create new instruments.
+
+---
+
+## 🎛️ System Requirements
+
+- Python ≥ 3.9 and ≤ 3.11.9  
+- MediaPipe **≤ 0.10.30** (newer versions may break `mp.solutions`)  
+- A webcam  
+- A MIDI‑compatible application (Ableton Live, Logic, Bitwig, REAPER, etc.)
+
+---
+
+## 📦 Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/LolBaum/HandMadeMidi.git
+   cd HandMadeMidi
+   ```
+
+2. **Create a virtual environment** (recommended)
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # on Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Install a virtual MIDI port** (optional, but recommended)  
+   - On **macOS/Linux**: `python-rtmidi` is included and works out‑of‑the‑box.  
+   - On **Windows**: install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) and create a port named `"Motion Controller"` (or change the name in `config.py`).
+
+5. **Run the app**
+   ```bash
+   python main.py
+   ```
+
+---
+
+## 🖐️ How to Use
+
+### The Interface
+
+- **Camera feed** – shows your hands with skeleton overlays.  
+- **Right panel** – displays the smoothed value and MIDI output for each active feature.  
+- **Bottom panel** – preset buttons. Click to instantly switch presets for each hand.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `0`–`9` | Set left‑hand preset to index 0–9 |
+| `Shift` + `0`–`9` | Set right‑hand preset |
+| `m` | Toggle **MIDI Mapper Mode** (see below) |
+| `ESC` | Quit |
+
+### Mouse Interaction
+
+- Click a **preset button** in the bottom panel to switch that hand’s mapping.
+- Click the **circle button** in the top‑right corner to keep the window always on top.
+- In **Mapper Mode** (press `m`), every mapped feature becomes a clickable button. Click it to send its current MIDI value – great for learning CC numbers in your DAW.
+
+### MIDI Routing
+
+The app sends MIDI on **two consecutive channels** – left hand uses the preset’s `channel`, right hand uses `channel + 1` (configured in `config.py`).  
+
+
+## 📝 Configuring Presets (YAML)
+
+All presets are defined in `presets.yaml`. If this file is missing, the app falls back to built‑in defaults.
+
+### Structure
+
+```yaml
+- name: "My Preset"
+  features:
+    hand_pitch:
+      midi: [1, 20]          # [MIDI channel, CC number] – or null
+      norm_range: [-70, 50]  # raw value range to map to 0–127
+      filter: [0.5, 0.2]     # [min_cutoff, beta] for One‑Euro filter
+    hand_roll:
+      midi: [1, 21]
+      norm_range: [-100, 180]
+      filter: [0.5, 0.2]
+  note_config:               # optional – enables note generation
+    channel: 1
+    note_min: 36
+    note_max: 84
+    threshold: 0.3
+    timeout: 10.0
+    note_source: "palm_y"
+    bend_source: "palm_x"
+    gate_source: "thumb_index_dist"
+  deadband: 0.015            # prevent MIDI jitter
+  mirror_left_hand: true     # mirror landmarks for left hand
+```
+
+### Available Feature Names
+
+| Feature | Description |
+|---------|-------------|
+| `palm_x` | Normalised horizontal position (0..1) |
+| `palm_y` | Normalised vertical position (0..1) |
+| `hand_pitch` | Hand tilt forwards/backwards (degrees) |
+| `hand_roll` | Hand rotation around wrist (degrees) |
+| `thumb_index_dist` | Distance between thumb and index finger (normalised by hand scale) |
+| `fist` | Average curl of all fingers (0 = open, 1 = fist) |
+| `hand_scale` | Distance from wrist to middle MCP (roughly hand size) |
+
+---
+
+## 🔧 Adding New Features / Input Methods
+
+The system is designed to be extended beyond MediaPipe hand landmarks. To add a new feature (e.g., `hand_yaw`, `face_pose`, or a sensor value):
+
+1. **Define a function** in `hand_features.py` that accepts the current data (currently a list of landmark coordinates) and returns a dictionary with the new feature name and its raw value.
+   ```python
+   @staticmethod
+   def hand_yaw(landmarks):
+       wrist = np.array(landmarks[0])
+       middle_mcp = np.array(landmarks[9])
+       v = middle_mcp - wrist
+       yaw = np.degrees(np.arctan2(v[0], v[2]))
+       return {"hand_yaw": yaw}
+   ```
+
+2. **Register it** in `presets.py` under `FEATURE_FUNCS`:
+   ```python
+   FEATURE_FUNCS = {
+       # ...
+       "hand_yaw": HandFeatures.hand_yaw,
+   }
+   ```
+
+3. **Use it** in `presets.yaml`:
+   ```yaml
+   features:
+     hand_yaw:
+       midi: [1, 22]
+       norm_range: [-45, 45]
+       filter: [0.3, 0.1]
+   ```
+
+If you want to use a completely different input (e.g., face landmarks, OSC, or sensor data), you can modify the `_process_frame` method in `main.py` to feed that data into the feature extraction pipeline – the rest of the system (filters, MIDI, UI) stays unchanged.
+
+---
+
+## 🎛️ Ableton Live Integration (Max for Live)
+
+The app works out‑of‑the‑box with any MIDI‑learnable parameter. For a streamlined experience, we recommend the **CC Param Control 3.0** Max for Live device:
+
+- It offers 128 knobs that can be mapped to any device parameter.
+- Each knob corresponds to a MIDI CC (0‑127), matching the numbers used in your presets.
+- Set the MIDI input to the virtual port created by the app and start tweaking.
+
+You can find the device on the Ableton forum or ask the community for a copy.
+
+---
+
+## ❓ Troubleshooting
+
+| Issue | Likely Fix |
+|-------|------------|
+| Camera doesn’t open | Check your camera index in `config.py`. Try `0` or `1`. |
+| No MIDI port found | Install loopMIDI (Windows) or use the built‑in IAC driver (macOS). |
+| Hand detection is laggy | Reduce camera resolution in `vision.py` or lower `model_complexity`. |
+| Presets don’t load | Ensure `presets.yaml` is valid YAML. Use an online validator. |
+
+---
+
+## 🧩 Repository Contents
+
+- `main.py` – the main application loop.
+- `ui.py` – all UI drawing and mouse interaction.
+- `layout.py` – canvas compositing.
+- `presets.py` – `Preset` class and loader.
+- `default_presets.py` – fallback preset data.
+- `hand_features.py` – feature extraction functions.
+- `note_engine.py` – note state machine.
+- `tracker.py` – hand tracking.
+- `midi_output.py`, `midi_cc.py` – MIDI helpers.
+- `filters.py` – One‑Euro filter.
+- `config.py` – global settings.
+- `presets.yaml` – user‑editable presets (create your own!).
+- `requirements.txt` – Python dependencies.
+
+---
+
+## 📜 License & Credits
+
+This project is open‑source under the MIT license.  
+Built with ❤️ and a lot of frustration by a human (and a little help from a machine).  
+Inspired by the desire to turn the body into an instrument – and to run, run far away from the screen.
+
+
+```
 And here I sit doing the crime
 I leared the words to cast my spells
 I did and magic was flowing though my veins
@@ -70,3 +281,4 @@ We'll scream in the heat and the fire.
 It will all go down in flames
 And I must no longer run and write.
 ```
+Now Make some Noise
