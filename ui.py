@@ -31,8 +31,8 @@ def init_ui():
 def set_window_topmost(window_name, state):
     try:
         cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1 if state else 0)
-    except Exception:
-        pass
+    except cv2.error as e:
+        print('error', e)
 
 def toggle_topmost(window_name):
     global always_on_top
@@ -109,10 +109,10 @@ def _draw_hand_values(canvas, x_offset, y_offset, hand_id, hand_preset,
     y_pos = y_offset
     anything_drawn = False
 
-    def get_norm(feature):
-        if feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][feature] is not None:
-            rng = preset.feature_configs[feature]["norm_range"]
-            return normalize.normalize_value(hand_smoothed[hand_id][feature], rng[0], rng[1])
+    def get_norm(_feature):
+        if _feature in hand_smoothed[hand_id] and hand_smoothed[hand_id][_feature] is not None:
+            rng = preset.feature_configs[_feature]["norm_range"]
+            return normalize.normalize_value(hand_smoothed[hand_id][_feature], rng[0], rng[1])
         return None
 
     # 1. Show all feature values (raw, normalised, and MIDI if mapped)
@@ -211,8 +211,6 @@ def draw_right_panel(canvas, x_offset, y_offset, panel_width, height,
     header_y = y_offset + 50
     cv2.putText(canvas, "Left Hand", (x_offset + 10, header_y),
                 cv2.FONT_HERSHEY_SIMPLEX, font_scale * 1.2, (0, 255, 255), 1)
-    next_y = _draw_hand_values(canvas, x_offset, header_y + 25, 0,
-                               hand_preset, hand_smoothed, font_scale, note_state)
 
     # ---- Right hand values (bottom half) ----
     mid_y = y_offset + height // 2

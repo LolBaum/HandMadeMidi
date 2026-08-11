@@ -447,8 +447,9 @@ class MotionControllerApp:
                 try:
                     rect = cv2.getWindowImageRect(self.window_name)
                     win_w, win_h = rect[2], rect[3]
-                except Exception:
+                except cv2.error as e:
                     win_w, win_h = 1280, 720
+                    print('error', e, f'defaulting to fallback: ({win_w}, {win_h})')
                 win_w = max(win_w, 600)
                 win_h = max(win_h, 400)
 

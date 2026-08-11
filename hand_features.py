@@ -110,74 +110,11 @@ class HandFeatures:
         }
 
     @staticmethod
-    def finger_spread(landmarks):
-        """
-        Returns a normalised distance between thumb tip and index tip,
-        divided by the hand's scale (distance from wrist to middle MCP).
-        This makes the measurement robust to changes in camera distance.
-        """
-        wrist = np.array(landmarks[0])
-        thumb_tip = np.array(landmarks[4])
-        index_tip = np.array(landmarks[8])
-        middle_mcp = np.array(landmarks[9])  # middle MCP
-
-        # Hand scale: distance from wrist to middle MCP
-        hand_scale = np.linalg.norm(middle_mcp - wrist)
-        # Avoid division by zero
-        if hand_scale < 1e-6:
-            return {"thumb_index_dist": 0.0}
-
-        # Raw distance between thumb tip and index tip
-        raw_dist = np.linalg.norm(thumb_tip - index_tip)
-        # Normalise by hand scale
-        norm_dist = raw_dist / hand_scale
-        return {"thumb_index_dist": norm_dist}
-
-    @staticmethod
-    def hand_fist(landmarks):
-        """
-        Computes a 'fist' value: average curl of four fingers (index, middle, ring, pinky).
-        Uses the angle at the PIP joint (landmark 6,10,14,18) between MCP and TIP.
-        Returns value 0..1 where 0 = open, 1 = fully closed.
-        """
-        # Finger tip and PIP indices
-        fingers = [
-            (8, 6, 5),   # index: tip, pip, mcp
-            (12, 10, 9), # middle
-            (16, 14, 13),# ring
-            (20, 18, 17) # pinky
-        ]
-        total_curl = 0.0
-        for tip_idx, pip_idx, mcp_idx in fingers:
-            tip = np.array(landmarks[tip_idx])
-            pip = np.array(landmarks[pip_idx])
-            mcp = np.array(landmarks[mcp_idx])
-            # Vector from MCP to PIP and from PIP to TIP
-            v1 = pip - mcp
-            v2 = tip - pip
-            # Angle between these two vectors (0 = straight, 180 = fully bent)
-            angle = np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6), -1.0, 1.0))
-            # Convert to 0-1: 0 = open (angle ~0), 1 = closed (angle ~π)
-            curl = np.clip(angle / np.pi, 0.0, 1.0)
-            total_curl += curl
-        fist_value = total_curl / 4.0
-        return {"fist": fist_value}
-
-    @staticmethod
     def position_and_spread(landmarks):
         """Returns palm_x, palm_y and thumb_index_dist in one dict."""
         pos = HandFeatures.palm_position(landmarks)
         spread = HandFeatures.finger_spread(landmarks)
         return {**pos, **spread}
-
-    # ----- NEW METHODS -----
-    @staticmethod
-    def hand_scale(landmarks):
-        """Return a measure of hand scale (distance from wrist to middle MCP)."""
-        wrist = np.array(landmarks[0])
-        middle_mcp = np.array(landmarks[9])
-        scale = np.linalg.norm(middle_mcp - wrist)
-        return {"hand_scale": scale}
 
     @staticmethod
     def position_spread_scale(landmarks):

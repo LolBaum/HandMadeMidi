@@ -16,7 +16,7 @@ class Track:
 
     def to_tuple(self) -> Tuple[str, float, float]:
         """Convenience method to match the expected output format."""
-        return (self.label, self.position[0], self.position[1])
+        return self.label, self.position[0], self.position[1]
 
 
 class HandTracker:

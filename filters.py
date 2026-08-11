@@ -40,7 +40,8 @@ class OneEuroFilter:
         self.dx_prev = None
         self.t_prev = None
 
-    def _low_pass(self, x, prev, cutoff, dt):
+    @staticmethod
+    def _low_pass(x, prev, cutoff, dt):
         """Simple low-pass filter (RC-style)"""
         if prev is None or dt <= 0.0:
             return x

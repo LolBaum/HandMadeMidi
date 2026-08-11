@@ -37,9 +37,9 @@ class Preset:
         return result
 
 
-def feature_config(midi=None, norm_range=(0.0, 1.0), filter=(0.3, 0.1)):
+def feature_config(midi=None, norm_range=(0.0, 1.0), _filter=(0.3, 0.1)):
     """Helper to build a feature configuration dict."""
-    return {"midi": midi, "norm_range": norm_range, "filter": filter}
+    return {"midi": midi, "norm_range": norm_range, "filter": _filter}
 
 
 # The preset list – now fully modular
@@ -49,50 +49,50 @@ PRESETS = [
 
     # 1: Pitch/Roll
     Preset("Pitch/Roll", {
-        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-70, 50), filter=(0.5, 0.2)),
-        "hand_roll": feature_config(midi=(1, 21), norm_range=(-100, 180), filter=(0.5, 0.2)),
+        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-70, 50), _filter=(0.5, 0.2)),
+        "hand_roll": feature_config(midi=(1, 21), norm_range=(-100, 180), _filter=(0.5, 0.2)),
     }, note_config=None, deadband=0.01, mirror_left_hand=True),
 
     # 2: Position
     Preset("Position", {
-        "palm_x": feature_config(midi=(2, 22), norm_range=(0.1, 0.9), filter=(0.3, 0.1)),
-        "palm_y": feature_config(midi=(2, 23), norm_range=(0.1, 0.9), filter=(0.3, 0.1)),
+        "palm_x": feature_config(midi=(2, 22), norm_range=(0.1, 0.9), _filter=(0.3, 0.1)),
+        "palm_y": feature_config(midi=(2, 23), norm_range=(0.1, 0.9), _filter=(0.3, 0.1)),
     }, note_config=None, deadband=0.015, mirror_left_hand=False),
 
     # 3: Finger Spread
     Preset("Finger Spread", {
-        "thumb_index_dist": feature_config(midi=(3, 30), norm_range=(0.0, 1.2), filter=(0.4, 0.15)),
+        "thumb_index_dist": feature_config(midi=(3, 30), norm_range=(0.0, 1.2), _filter=(0.4, 0.15)),
     }, note_config=None, deadband=0.01, mirror_left_hand=True),
 
     # 4: Fist
     Preset("Fist", {
-        "fist": feature_config(midi=(4, 40), norm_range=(0.0, 1.0), filter=(0.3, 0.1)),
+        "fist": feature_config(midi=(4, 40), norm_range=(0.0, 1.0), _filter=(0.3, 0.1)),
     }, note_config=None, deadband=0.01, mirror_left_hand=True),
 
     # 5: multi control
     Preset("Multi", {
         # hand_scale is mapped to CC1 (mod wheel)
-        "hand_scale": feature_config(midi=(1, 1), norm_range=(0.1, 0.4), filter=(0.3, 0.1)),
-        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-20, 20), filter=(0.01, 0.01)),
-        "hand_roll": feature_config(midi=(1, 21), norm_range=(-90, 90), filter=(0.01, 0.01)),
+        "hand_scale": feature_config(midi=(1, 1), norm_range=(0.1, 0.4), _filter=(0.3, 0.1)),
+        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-20, 20), _filter=(0.01, 0.01)),
+        "hand_roll": feature_config(midi=(1, 21), norm_range=(-90, 90), _filter=(0.01, 0.01)),
         # these features are used only for note generation – no direct MIDI CC
-        "palm_x": feature_config(midi=(2, 22), norm_range=(0.2, 0.8), filter=(0.3, 0.1)),
-        "palm_y": feature_config(midi=(2, 23), norm_range=(0.2, 0.8), filter=(0.3, 0.1)),
-        "thumb_index_dist": feature_config(midi=(2,24), norm_range=(0.15, 1.4), filter=(0.5, 0.5)),
-        "fist": feature_config(midi=(4, 40), norm_range=(0.05, 0.7), filter=(0.3, 0.1)),
+        "palm_x": feature_config(midi=(2, 22), norm_range=(0.2, 0.8), _filter=(0.3, 0.1)),
+        "palm_y": feature_config(midi=(2, 23), norm_range=(0.2, 0.8), _filter=(0.3, 0.1)),
+        "thumb_index_dist": feature_config(midi=(2,24), norm_range=(0.15, 1.4), _filter=(0.5, 0.5)),
+        "fist": feature_config(midi=(4, 40), norm_range=(0.05, 0.7), _filter=(0.3, 0.1)),
     }, note_config=None, deadband=0.015, mirror_left_hand=False),
 
     # 6: Note Generator (modular)
     Preset("Note Gen", {
         # hand_scale is mapped to CC1 (mod wheel)
-        "hand_scale": feature_config(midi=(1, 1), norm_range=(0.1, 0.25), filter=(0.2, 0.05)),
-        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-20, 20), filter=(0.01, 0.01)),
-        "hand_roll": feature_config(midi=(1, 21), norm_range=(-90, 90), filter=(0.01, 0.01)),
+        "hand_scale": feature_config(midi=(1, 1), norm_range=(0.1, 0.25), _filter=(0.2, 0.05)),
+        "hand_pitch": feature_config(midi=(1, 20), norm_range=(-20, 20), _filter=(0.01, 0.01)),
+        "hand_roll": feature_config(midi=(1, 21), norm_range=(-90, 90), _filter=(0.01, 0.01)),
         # these features are used only for note generation – no direct MIDI CC
-        "palm_x": feature_config(midi=(2, 22), norm_range=(0.2, 0.8), filter=(0.3, 0.1)),
-        "palm_y": feature_config(midi=(2, 23), norm_range=(0.2, 0.8), filter=(0.3, 0.1)),
-        "thumb_index_dist": feature_config(midi=(2,24), norm_range=(0.0, 0.4), filter=(0.5, 0.5)),
-        "fist": feature_config(midi=(4, 40), norm_range=(0.05, 0.7), filter=(0.3, 0.1)),
+        "palm_x": feature_config(midi=(2, 22), norm_range=(0.2, 0.8), _filter=(0.3, 0.1)),
+        "palm_y": feature_config(midi=(2, 23), norm_range=(0.2, 0.8), _filter=(0.3, 0.1)),
+        "thumb_index_dist": feature_config(midi=(2,24), norm_range=(0.0, 0.4), _filter=(0.5, 0.5)),
+        "fist": feature_config(midi=(4, 40), norm_range=(0.05, 0.7), _filter=(0.3, 0.1)),
     }, note_config={
         "channel": 1,
         "note_min": 12,
