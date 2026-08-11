@@ -18,11 +18,10 @@ import ui
 # ----------------------------------------------------------------------
 class MotionControllerApp:
     def __init__(self):
-        # ---- State (former globals) ----
+        # ---- State ----
         self.hand_preset = [0, 0]
         self.hand_filters = [{}, {}]
         self.hand_smoothed = [{}, {}]
-        self.hand_last_midi = [{}, {}]
 
         self.tracker = HandTracker(
             match_distance=0.02,
@@ -73,8 +72,84 @@ class MotionControllerApp:
         self.midi_cc.reset_hand(hand_id)
         self.hand_filters[hand_id] = new_filters
         self.hand_smoothed[hand_id] = {feature: None for feature in preset.features}
-        self.hand_last_midi[hand_id] = {feature: -1 for feature in preset.features}
 
+    # ------------------------------------------------------------------
+    # Hand detection and processing (extracted from _process_frame)
+    # ------------------------------------------------------------------
+    def _detect_hands(self, results):
+        """
+        Extract hand landmarks and labels from MediaPipe results.
+        Returns a list of (label, hand_landmarks) with robust fallback logic.
+        """
+        detected_hands = []
+        if not results or not results.multi_hand_landmarks:
+            return detected_hands
+
+        if results.multi_handedness:
+            labels = [results.multi_handedness[i].classification[0].label
+                      for i in range(len(results.multi_hand_landmarks))]
+            # Handle conflict where both hands claim same label
+            if len(labels) == 2 and labels[0] == labels[1]:
+                print(f"⚠️ Handedness conflict: both detected as {labels[0]}. Falling back to spatial sorting.")
+                hands_with_x = []
+                for hand_landmarks in results.multi_hand_landmarks:
+                    wrist_x = hand_landmarks.landmark[0].x
+                    hands_with_x.append((wrist_x, hand_landmarks))
+                hands_with_x.sort(key=lambda t: t[0])
+                if len(hands_with_x) > 0:
+                    detected_hands.append(('Left', hands_with_x[0][1]))
+                if len(hands_with_x) > 1:
+                    detected_hands.append(('Right', hands_with_x[1][1]))
+            else:
+                for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                    label = results.multi_handedness[idx].classification[0].label
+                    detected_hands.append((label, hand_landmarks))
+        else:
+            # No handedness data – fallback to spatial sorting
+            hands = []
+            for hand_landmarks in results.multi_hand_landmarks:
+                wrist_x = hand_landmarks.landmark[0].x
+                hands.append((wrist_x, hand_landmarks))
+            hands.sort(key=lambda t: t[0])
+            if len(hands) > 0:
+                detected_hands.append(('Left', hands[0][1]))
+            if len(hands) > 1:
+                detected_hands.append(('Right', hands[1][1]))
+
+        return detected_hands
+
+    def _process_detected_hands(self, detected_hands, frame, w, h):
+        """
+        Match detected hands to stable tracks and run feature extraction/drawing.
+        """
+        # Update tracker with current positions
+        detected_positions = [(label, lm.landmark[0].x, lm.landmark[0].y)
+                              for label, lm in detected_hands]
+        stable_hands = self.tracker.update(detected_positions)
+
+        # Match each detection to a stable track and process
+        processed_ids = set()
+        for label, lm in detected_hands:
+            wrist = lm.landmark[0]
+            best_stable_label = None
+            best_dist = float('inf')
+            for s_label, sx, sy in stable_hands:
+                dx = sx - wrist.x
+                dy = sy - wrist.y
+                dist = dx*dx + dy*dy
+                if dist < best_dist:
+                    best_dist = dist
+                    best_stable_label = s_label
+
+            if best_stable_label is not None and best_dist < 0.02:
+                hand_id = 0 if best_stable_label == 'Left' else 1
+                if hand_id not in processed_ids:
+                    self._process_hand(hand_id, lm, frame, w, h)
+                    processed_ids.add(hand_id)
+
+    # ------------------------------------------------------------------
+    # Note processing
+    # ------------------------------------------------------------------
     def _process_notes(self):
         """
         Orchestrate note generation for both hands using the NoteEngine.
@@ -83,7 +158,6 @@ class MotionControllerApp:
         current_time = time.time()
 
         for hand_id in (0, 1):
-            # ---- Skip if preset is Off or has no note_config ----
             preset_idx = self.hand_preset[hand_id]
             if preset_idx == 0:
                 continue
@@ -96,24 +170,22 @@ class MotionControllerApp:
             bend_source = note_cfg["bend_source"]
             gate_source = note_cfg["gate_source"]
 
-            # ---- Ensure we have smoothed values for all required sources ----
+            # Ensure we have smoothed values for all required sources
             if any(f not in self.hand_smoothed[hand_id] or self.hand_smoothed[hand_id][f] is None
                    for f in (note_source, bend_source, gate_source)):
                 continue
 
-            # ---- Get raw smoothed values ----
             note_raw = self.hand_smoothed[hand_id][note_source]
             bend_raw = self.hand_smoothed[hand_id][bend_source]
             gate_raw = self.hand_smoothed[hand_id][gate_source]
 
-            # ---- Normalise using each feature's own range ----
+            # Normalise using each feature's own range
             norm_range_note = preset.feature_configs[note_source]["norm_range"]
             norm_note = normalize.normalize_value(note_raw, norm_range_note[0], norm_range_note[1])
 
             norm_range_bend = preset.feature_configs[bend_source]["norm_range"]
             norm_bend = normalize.normalize_value(bend_raw, norm_range_bend[0], norm_range_bend[1])
 
-            # ---- Prepare config for the engine ----
             note_config = {
                 'note_min': note_cfg['note_min'],
                 'note_max': note_cfg['note_max'],
@@ -121,13 +193,11 @@ class MotionControllerApp:
                 'timeout': note_cfg['timeout'],
             }
 
-            # ---- Update the engine and get actions ----
             actions = self.note_engine.update(
                 hand_id, norm_note, norm_bend, gate_raw,
                 current_time, note_config
             )
 
-            # ---- Dispatch actions ----
             for action in actions:
                 if action[0] == 'note_on':
                     _, hand, note, vel = action
@@ -139,12 +209,15 @@ class MotionControllerApp:
                     _, hand, bend = action
                     self._send_pitch_bend(hand, bend)
 
+    # ------------------------------------------------------------------
+    # Preset switching
+    # ------------------------------------------------------------------
     def switch_preset(self, hand_id, preset_idx):
         """
         Change preset for a specific hand.
         Turns off any active note, resets pitch bend, re-initialises filters.
         """
-        actions = self.note_engine.stop(hand_id)  # returns list of ('note_off', ...) and ('pitch_bend', ...)
+        actions = self.note_engine.stop(hand_id)
         for action in actions:
             if action[0] == 'note_off':
                 _, hand, note = action
@@ -157,7 +230,7 @@ class MotionControllerApp:
             return
 
         self.hand_preset[hand_id] = preset_idx
-        self._init_hand(hand_id)  # this uses the new preset
+        self._init_hand(hand_id)
 
     # ------------------------------------------------------------------
     # MIDI output helpers
@@ -286,63 +359,12 @@ class MotionControllerApp:
         h, w = frame.shape[:2]
 
         # ---- 1. Detect hands with labels ----
-        detected_hands = []
-        if results and results.multi_hand_landmarks:
-            if results.multi_handedness:
-                labels = [results.multi_handedness[i].classification[0].label
-                          for i in range(len(results.multi_hand_landmarks))]
-                if len(labels) == 2 and labels[0] == labels[1]:
-                    print(f"⚠️ Handedness conflict: both detected as {labels[0]}. Falling back to spatial sorting.")
-                    hands_with_x = []
-                    for hand_landmarks in results.multi_hand_landmarks:
-                        wrist_x = hand_landmarks.landmark[0].x
-                        hands_with_x.append((wrist_x, hand_landmarks))
-                    hands_with_x.sort(key=lambda t: t[0])
-                    if len(hands_with_x) > 0:
-                        detected_hands.append(('Left', hands_with_x[0][1]))
-                    if len(hands_with_x) > 1:
-                        detected_hands.append(('Right', hands_with_x[1][1]))
-                else:
-                    for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                        label = results.multi_handedness[idx].classification[0].label
-                        detected_hands.append((label, hand_landmarks))
-            else:
-                # No handedness data – fallback to spatial
-                hands = []
-                for hand_landmarks in results.multi_hand_landmarks:
-                    wrist_x = hand_landmarks.landmark[0].x
-                    hands.append((wrist_x, hand_landmarks))
-                hands.sort(key=lambda t: t[0])
-                if len(hands) > 0:
-                    detected_hands.append(('Left', hands[0][1]))
-                if len(hands) > 1:
-                    detected_hands.append(('Right', hands[1][1]))
+        detected_hands = self._detect_hands(results)
 
-        # ---- 2. Update tracker ----
-        detected_positions = [(label, lm.landmark[0].x, lm.landmark[0].y) for label, lm in detected_hands]
-        stable_hands = self.tracker.update(detected_positions)
+        # ---- 2. Match to stable tracks and process (draw & filter) ----
+        self._process_detected_hands(detected_hands, frame, w, h)
 
-        # ---- 3. Process each hand (draws on frame) ----
-        processed_ids = set()
-        for label, lm in detected_hands:
-            wrist = lm.landmark[0]
-            best_stable_label = None
-            best_dist = float('inf')
-            for s_label, sx, sy in stable_hands:
-                dx = sx - wrist.x
-                dy = sy - wrist.y
-                dist = dx*dx + dy*dy
-                if dist < best_dist:
-                    best_dist = dist
-                    best_stable_label = s_label
-
-            if best_stable_label is not None and best_dist < 0.02:
-                hand_id = 0 if best_stable_label == 'Left' else 1
-                if hand_id not in processed_ids:
-                    self._process_hand(hand_id, lm, frame, w, h)
-                    processed_ids.add(hand_id)
-
-        # ---- 4. Send MIDI CC messages ----
+        # ---- 3. Send MIDI CC messages ----
         messages_to_send = []
         for hand_id in (0, 1):
             preset_idx = self.hand_preset[hand_id]
@@ -358,7 +380,7 @@ class MotionControllerApp:
         if messages_to_send:
             self.midi_out.send_messages(messages_to_send)
 
-        # ---- 5. Note generation ----
+        # ---- 4. Note generation ----
         self._process_notes()
 
         return frame
