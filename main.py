@@ -4,6 +4,7 @@ import numpy as np
 import time
 import mido
 
+from midi_cc import MidiCCProcessor
 from note_engine import NoteEngine
 from tracker import HandTracker
 from vision import Vision
@@ -34,6 +35,8 @@ class MotionControllerApp:
             {'active': False, 'note': None, 'start_time': 0.0, 'smoothed_bend': 0.0}
         ]
         self.note_engine = NoteEngine(alpha=0.2, state=self.hand_note_state)
+
+        self.midi_cc = MidiCCProcessor()
 
         self.mapper_mode = False
         self.midi_out = None
@@ -67,17 +70,81 @@ class MotionControllerApp:
                 min_cutoff=settings[0] * config.GLOBAL_CUTOFF_MULTIPLIER,
                 beta=settings[1] * config.GLOBAL_BETA_MULTIPLIER
             )
+        self.midi_cc.reset_hand(hand_id)
         self.hand_filters[hand_id] = new_filters
         self.hand_smoothed[hand_id] = {feature: None for feature in preset.features}
         self.hand_last_midi[hand_id] = {feature: -1 for feature in preset.features}
 
-    def switch_preset(self, hand_id: int, preset_idx: int) -> None:
+    def _process_notes(self):
         """
-        Change preset for a specific hand, turning off any active note
-        and resetting filters and MIDI state.
+        Orchestrate note generation for both hands using the NoteEngine.
+        Retrieves smoothed features, normalises them, and executes the engine's actions.
         """
-        # 1. Stop any active note for this hand
-        actions = self.note_engine.stop(hand_id)  # returns actions to turn off note and bend
+        current_time = time.time()
+
+        for hand_id in (0, 1):
+            # ---- Skip if preset is Off or has no note_config ----
+            preset_idx = self.hand_preset[hand_id]
+            if preset_idx == 0:
+                continue
+            preset = PRESETS[preset_idx]
+            if preset.note_config is None:
+                continue
+
+            note_cfg = preset.note_config
+            note_source = note_cfg["note_source"]
+            bend_source = note_cfg["bend_source"]
+            gate_source = note_cfg["gate_source"]
+
+            # ---- Ensure we have smoothed values for all required sources ----
+            if any(f not in self.hand_smoothed[hand_id] or self.hand_smoothed[hand_id][f] is None
+                   for f in (note_source, bend_source, gate_source)):
+                continue
+
+            # ---- Get raw smoothed values ----
+            note_raw = self.hand_smoothed[hand_id][note_source]
+            bend_raw = self.hand_smoothed[hand_id][bend_source]
+            gate_raw = self.hand_smoothed[hand_id][gate_source]
+
+            # ---- Normalise using each feature's own range ----
+            norm_range_note = preset.feature_configs[note_source]["norm_range"]
+            norm_note = normalize.normalize_value(note_raw, norm_range_note[0], norm_range_note[1])
+
+            norm_range_bend = preset.feature_configs[bend_source]["norm_range"]
+            norm_bend = normalize.normalize_value(bend_raw, norm_range_bend[0], norm_range_bend[1])
+
+            # ---- Prepare config for the engine ----
+            note_config = {
+                'note_min': note_cfg['note_min'],
+                'note_max': note_cfg['note_max'],
+                'threshold': note_cfg['threshold'],
+                'timeout': note_cfg['timeout'],
+            }
+
+            # ---- Update the engine and get actions ----
+            actions = self.note_engine.update(
+                hand_id, norm_note, norm_bend, gate_raw,
+                current_time, note_config
+            )
+
+            # ---- Dispatch actions ----
+            for action in actions:
+                if action[0] == 'note_on':
+                    _, hand, note, vel = action
+                    self._send_note_on(hand, note, vel)
+                elif action[0] == 'note_off':
+                    _, hand, note = action
+                    self._send_note_off(hand, note)
+                elif action[0] == 'pitch_bend':
+                    _, hand, bend = action
+                    self._send_pitch_bend(hand, bend)
+
+    def switch_preset(self, hand_id, preset_idx):
+        """
+        Change preset for a specific hand.
+        Turns off any active note, resets pitch bend, re-initialises filters.
+        """
+        actions = self.note_engine.stop(hand_id)  # returns list of ('note_off', ...) and ('pitch_bend', ...)
         for action in actions:
             if action[0] == 'note_off':
                 _, hand, note = action
@@ -86,13 +153,11 @@ class MotionControllerApp:
                 _, hand, bend = action
                 self._send_pitch_bend(hand, bend)
 
-        # 2. Update preset index
         if preset_idx < 0 or preset_idx >= len(PRESETS):
             return
-        self.hand_preset[hand_id] = preset_idx
 
-        # 3. Re-initialize filters and smoothed values for this hand
-        self._init_hand(hand_id)
+        self.hand_preset[hand_id] = preset_idx
+        self._init_hand(hand_id)  # this uses the new preset
 
     # ------------------------------------------------------------------
     # MIDI output helpers
@@ -285,98 +350,16 @@ class MotionControllerApp:
                 continue
             preset = PRESETS[preset_idx]
             hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
-            for feature in preset.features:
-                midi_info = preset.feature_configs[feature]["midi"]
-                if midi_info is None:
-                    continue
-                base_ch, cc = midi_info
-                if feature in self.hand_smoothed[hand_id] and self.hand_smoothed[hand_id][feature] is not None:
-                    raw = self.hand_smoothed[hand_id][feature]
-                    norm_range = preset.feature_configs[feature]["norm_range"]
-                    norm = normalize.normalize_value(raw, norm_range[0], norm_range[1])
-                    midi_val = normalize.midi_value(norm)
-                    if abs(midi_val - self.hand_last_midi[hand_id].get(feature, -1)) > preset.deadband * 127:
-                        actual_channel = min(15, max(0, base_ch + hand_offset))
-                        messages_to_send.append((actual_channel, cc, midi_val))
-                        self.hand_last_midi[hand_id][feature] = midi_val
+            messages = self.midi_cc.process_hand(
+                hand_id, preset, self.hand_smoothed[hand_id], hand_offset
+            )
+            messages_to_send.extend(messages)
 
         if messages_to_send:
             self.midi_out.send_messages(messages_to_send)
 
         # ---- 5. Note generation ----
-        current_time = time.time()
-        for hand_id in (0, 1):
-            preset_idx = self.hand_preset[hand_id]
-            if preset_idx == 0:
-                continue
-            preset = PRESETS[preset_idx]
-            if preset.note_config is None:
-                continue
-
-            note_cfg = preset.note_config
-            note_source = note_cfg["note_source"]
-            bend_source = note_cfg["bend_source"]
-            gate_source = note_cfg["gate_source"]
-
-            # Ensure we have smoothed values for all required sources
-            if any(f not in self.hand_smoothed[hand_id] or self.hand_smoothed[hand_id][f] is None
-                   for f in (note_source, bend_source, gate_source)):
-                continue
-
-            # Get raw smoothed values
-            note_raw = self.hand_smoothed[hand_id][note_source]
-            bend_raw = self.hand_smoothed[hand_id][bend_source]
-            gate_raw = self.hand_smoothed[hand_id][gate_source]
-
-            # Normalise using each feature's own range
-            norm_range_note = preset.feature_configs[note_source]["norm_range"]
-            norm_y = normalize.normalize_value(note_raw, norm_range_note[0], norm_range_note[1])
-
-            norm_range_bend = preset.feature_configs[bend_source]["norm_range"]
-            norm_x = normalize.normalize_value(bend_raw, norm_range_bend[0], norm_range_bend[1])
-
-            # dist (gate) – threshold is compared to raw gate value
-            dist = gate_raw
-
-            note_min = note_cfg["note_min"]
-            note_max = note_cfg["note_max"]
-            candidate_note = int(round((1 - norm_y) * (note_max - note_min) + note_min))
-            candidate_note = max(0, min(127, candidate_note))
-
-            raw_bend = (norm_x - 0.5) * 16384
-            raw_bend = max(-8192, min(8191, raw_bend))
-
-            threshold = note_cfg["threshold"]
-            timeout = note_cfg["timeout"]
-            state = self.hand_note_state[hand_id]
-
-            if not state['active'] and dist < threshold:
-                self._send_note_on(hand_id, candidate_note)
-                state['active'] = True
-                state['note'] = candidate_note
-                state['start_time'] = current_time
-                state['smoothed_bend'] = raw_bend
-                self._send_pitch_bend(hand_id, int(round(state['smoothed_bend'])))
-            elif state['active'] and dist >= threshold:
-                self._send_note_off(hand_id, state['note'])
-                self._send_pitch_bend(hand_id, 0)
-                state['active'] = False
-                state['note'] = None
-                state['start_time'] = 0.0
-                state['smoothed_bend'] = 0.0
-            elif state['active']:
-                alpha = 0.2
-                state['smoothed_bend'] = alpha * raw_bend + (1 - alpha) * state['smoothed_bend']
-                bend_smoothed = int(round(state['smoothed_bend']))
-                bend_smoothed = max(-8192, min(8191, bend_smoothed))
-                self._send_pitch_bend(hand_id, bend_smoothed)
-                if (current_time - state['start_time']) > timeout:
-                    self._send_note_off(hand_id, state['note'])
-                    self._send_pitch_bend(hand_id, 0)
-                    state['active'] = False
-                    state['note'] = None
-                    state['start_time'] = 0.0
-                    state['smoothed_bend'] = 0.0
+        self._process_notes()
 
         return frame
 
