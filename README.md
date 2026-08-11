@@ -1,5 +1,7 @@
 # Gesture → MIDI Controller  
 
+Inspired by [paolinemagnus](https://www.instagram.com/p/DZhzqAZCjUO/)
+
 **This is a real‑time hand‑gesture to MIDI translator.**  
 It turns your webcam into a musical instrument – no gloves, no markers, just your hands.  
 Designed for sound artists, performers, and tinkerers who want to sculpt sound with movement.
@@ -238,8 +240,7 @@ Set the MIDI input to the virtual port created by the app and start tweaking.
 ## 📜 License & Credits
 
 This project is open‑source under the MIT license.  
-Built with ❤️ and a lot of frustration by a human (and a little help from a machine).  
-Inspired by the desire to turn the body into an instrument – and to run, run far away from the screen.
+Built with ❤️ and a lot of frustration by a human (and a help from a machine that might destroy our world).  
 
 
 ```
