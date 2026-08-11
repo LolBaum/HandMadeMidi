@@ -4,7 +4,6 @@ import numpy as np
 import time
 import mido
 from vision import Vision
-from landmarks import LandmarkExtractor
 from hand_features import HandFeatures
 from filters import OneEuroFilter
 from midi_output import MidiOutput
