@@ -167,14 +167,14 @@
 
 - name: "Theremin Pitch"
   features:
-    palm_y:
+    index_tip_y:
       midi: null
       norm_range: [0.2, 0.8]
       filter: [0.1, 0.05]
       invert: false               # <-- add this (feature-level invert)
   note_config: null
   pitch_bend:
-    source: "palm_y"
+    source: "index_tip_y"
     channel: 1
     deadband: 0.0005
     invert: false # <-- set to false so we don't invert twice

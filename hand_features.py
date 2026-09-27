@@ -17,6 +17,17 @@ class HandFeatures:
         return {"palm_y": 1.0 - middle_mcp[1]}
 
     @staticmethod
+    def index_tip_y(landmarks):
+        index_tip = np.array(landmarks[8])
+        # Flip y so that moving up gives a HIGHER value (consistent with palm_y)
+        return {"index_tip_y": 1.0 - index_tip[1]}
+
+    @staticmethod
+    def index_tip_x(landmarks):
+        index_tip = np.array(landmarks[8])
+        return {"index_tip_x": index_tip[0]}
+
+    @staticmethod
     def hand_pitch(landmarks):
         wrist = np.array(landmarks[0])
         middle_mcp = np.array(landmarks[9])

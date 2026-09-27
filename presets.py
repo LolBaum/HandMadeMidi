@@ -6,6 +6,8 @@ from default_presets import DEFAULT_PRESETS_DATA
 FEATURE_FUNCS = {
     "palm_x": HandFeatures.palm_x,
     "palm_y": HandFeatures.palm_y,
+    "index_tip_x": HandFeatures.index_tip_x,   # <-- new
+    "index_tip_y": HandFeatures.index_tip_y,   # <-- new
     "hand_pitch": HandFeatures.hand_pitch,
     "hand_roll": HandFeatures.hand_roll,
     "thumb_index_dist": HandFeatures.finger_spread,

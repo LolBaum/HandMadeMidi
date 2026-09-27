@@ -59,8 +59,8 @@ DEFAULT_PRESETS_DATA = [
      "deadband": 0.005, "mirror_left_hand": True, "apply_channel_offset": False},
 
     {"name": "Theremin Pitch", "features": {
-        "palm_y": {"midi": None, "norm_range": [0.3, 0.8], "filter": [0.5, 0.2], "invert": True},
+        "index_tip_y": {"midi": None, "norm_range": [0.3, 0.8], "filter": [0.5, 0.2], "invert": True},
     }, "note_config": None,
-     "pitch_bend": {"source": "palm_y", "channel": 1, "deadband": 0.0005, "invert": False},
+     "pitch_bend": {"source": "index_tip_y", "channel": 1, "deadband": 0.0005, "invert": False},
      "deadband": 0.005, "mirror_left_hand": True, "apply_channel_offset": False}
 ]
