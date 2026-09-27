@@ -155,9 +155,10 @@
 - name: "Theremin Volume"
   features:
     palm_y:
-      midi: [1, 11]              # CC 11 (Expression) — raise hand = louder
-      norm_range: [0.3, 0.8]
+      midi: [1, 1]              # CC 11 (Expression)
+      norm_range: [0.2, 0.5]
       filter: [0.5, 0.2]
+      invert: false               # <-- add this
   note_config: null
   pitch_bend: null
   deadband: 0.005
@@ -167,15 +168,16 @@
 - name: "Theremin Pitch"
   features:
     palm_y:
-      midi: null                 # Not sent as CC — only drives pitch bend
-      norm_range: [0.3, 0.8]
-      filter: [0.5, 0.2]
+      midi: null
+      norm_range: [0.2, 0.8]
+      filter: [0.1, 0.05]
+      invert: false               # <-- add this (feature-level invert)
   note_config: null
   pitch_bend:
     source: "palm_y"
     channel: 1
     deadband: 0.0005
-    invert: false
+    invert: false # <-- set to false so we don't invert twice
   deadband: 0.005
   mirror_left_hand: true
   apply_channel_offset: false

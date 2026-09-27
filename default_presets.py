@@ -54,13 +54,13 @@ DEFAULT_PRESETS_DATA = [
      "deadband": 0.015, "mirror_left_hand": False, "apply_channel_offset": True},
 
     {"name": "Theremin Volume", "features": {
-        "palm_y": {"midi": [1, 11], "norm_range": [0.3, 0.8], "filter": [0.5, 0.2]},
-     }, "note_config": None, "pitch_bend": None,
+        "palm_y": {"midi": [1, 11], "norm_range": [0.3, 0.8], "filter": [0.5, 0.2], "invert": True},
+    }, "note_config": None, "pitch_bend": None,
      "deadband": 0.005, "mirror_left_hand": True, "apply_channel_offset": False},
 
     {"name": "Theremin Pitch", "features": {
-        "palm_y": {"midi": None, "norm_range": [0.3, 0.8], "filter": [0.5, 0.2]},
-     }, "note_config": None,
+        "palm_y": {"midi": None, "norm_range": [0.3, 0.8], "filter": [0.5, 0.2], "invert": True},
+    }, "note_config": None,
      "pitch_bend": {"source": "palm_y", "channel": 1, "deadband": 0.0005, "invert": False},
-     "deadband": 0.005, "mirror_left_hand": True, "apply_channel_offset": False},
+     "deadband": 0.005, "mirror_left_hand": True, "apply_channel_offset": False}
 ]

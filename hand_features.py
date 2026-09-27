@@ -12,7 +12,9 @@ class HandFeatures:
     @staticmethod
     def palm_y(landmarks):
         middle_mcp = np.array(landmarks[9])
-        return {"palm_y": middle_mcp[1]}
+        # MediaPipe y increases downward (0=top, 1=bottom).
+        # Flip it so that moving the hand UP gives a HIGHER value.
+        return {"palm_y": 1.0 - middle_mcp[1]}
 
     @staticmethod
     def hand_pitch(landmarks):

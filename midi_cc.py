@@ -17,33 +17,28 @@ class MidiCCProcessor:
                      hand_offset: int) -> List[Tuple[int, int, int]]:
         """
         Process one hand's smoothed features and return a list of (channel, cc, value) messages.
-
-        Args:
-            hand_id: 0 or 1
-            preset: Preset object (from PRESETS)
-            smoothed_features: dict {feature_name: smoothed_value}
-            hand_offset: MIDI channel offset for this hand (0 or 1)
-
-        Returns:
-            List of messages to send.
         """
         messages = []
         for feature in preset.features:
-            midi_info = preset.feature_configs[feature]["midi"]
+            feature_cfg = preset.feature_configs[feature]
+            midi_info = feature_cfg["midi"]
             if midi_info is None:
                 continue
             base_ch, cc = midi_info
 
-            # Skip if feature not smoothed yet
             if feature not in smoothed_features or smoothed_features[feature] is None:
                 continue
 
             raw = smoothed_features[feature]
-            norm_range = preset.feature_configs[feature]["norm_range"]
+            norm_range = feature_cfg["norm_range"]
             norm = normalize.normalize_value(raw, norm_range[0], norm_range[1])
+
+            # Apply invert if configured on the feature
+            if feature_cfg.get("invert", False):
+                norm = 1.0 - norm
+
             midi_val = normalize.midi_value(norm)
 
-            # Deadband check
             key = (hand_id, feature)
             last_val = self._last_midi.get(key, -1)
             if abs(midi_val - last_val) > preset.deadband * 127:
