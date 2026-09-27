@@ -7,7 +7,7 @@ class HandFeatures:
     @staticmethod
     def palm_x(landmarks):
         middle_mcp = np.array(landmarks[9])
-        return {"palm_x": middle_mcp[0]}
+        return {"palm_x": 1.0 - middle_mcp[0]}
 
     @staticmethod
     def palm_y(landmarks):
@@ -25,7 +25,7 @@ class HandFeatures:
     @staticmethod
     def index_tip_x(landmarks):
         index_tip = np.array(landmarks[8])
-        return {"index_tip_x": index_tip[0]}
+        return {"index_tip_x": 1.0 - index_tip[0]}
 
     @staticmethod
     def hand_pitch(landmarks):
