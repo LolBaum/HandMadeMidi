@@ -155,10 +155,19 @@
 - name: "Theremin Volume"
   features:
     palm_y:
-      midi: [1, 1]              # CC 11 (Expression)
+      midi: [1, 1]
       norm_range: [0.2, 0.5]
       filter: [0.5, 0.2]
-      invert: false               # <-- add this
+      invert: false
+    palm_x:
+      midi: [ 1, 20 ]
+      norm_range: [ 0.2, 0.5 ]
+      filter: [ 0.5, 0.2 ]
+      invert: false
+    thumb_index_dist:
+      midi: [2, 21]
+      norm_range: [0.15, 1.4]
+      filter: [0.5, 0.5]
   note_config: null
   pitch_bend: null
   deadband: 0.005
