@@ -7,6 +7,7 @@ import mido
 from layout import build_canvas
 from midi_cc import MidiCCProcessor
 from note_engine import NoteEngine
+from pitch_bend import PitchBendProcessor
 from tracker import HandTracker
 from vision import Vision
 from filters import OneEuroFilter
@@ -31,12 +32,13 @@ class MotionControllerApp:
         )
 
         self.hand_note_state = [
-            {'active': False, 'note': None, 'start_time': 0.0, 'smoothed_bend': 0.0},
-            {'active': False, 'note': None, 'start_time': 0.0, 'smoothed_bend': 0.0}
+            {'active': False, 'note': None, 'start_time': 0.0},
+            {'active': False, 'note': None, 'start_time': 0.0}
         ]
-        self.note_engine = NoteEngine(alpha=0.2, state=self.hand_note_state)
+        self.note_engine = NoteEngine(state=self.hand_note_state)
 
         self.midi_cc = MidiCCProcessor()
+        self.pitch_bend = PitchBendProcessor()
 
         self.mapper_mode = False
         self.midi_out = None
@@ -114,6 +116,7 @@ class MotionControllerApp:
         self.midi_cc.reset_hand(hand_id)
         self.hand_filters[hand_id] = new_filters
         self.hand_smoothed[hand_id] = {feature: None for feature in preset.features}
+        self.pitch_bend.reset_hand(hand_id)
 
     # ------------------------------------------------------------------
     # Hand detection and processing (extracted from _process_frame)
@@ -193,10 +196,6 @@ class MotionControllerApp:
     # Note processing
     # ------------------------------------------------------------------
     def _process_notes(self):
-        """
-        Orchestrate note generation for both hands using the NoteEngine.
-        Retrieves smoothed features, normalises them, and executes the engine's actions.
-        """
         current_time = time.time()
 
         for hand_id in (0, 1):
@@ -209,24 +208,17 @@ class MotionControllerApp:
 
             note_cfg = preset.note_config
             note_source = note_cfg["note_source"]
-            bend_source = note_cfg["bend_source"]
             gate_source = note_cfg["gate_source"]
 
-            # Ensure we have smoothed values for all required sources
             if any(f not in self.hand_smoothed[hand_id] or self.hand_smoothed[hand_id][f] is None
-                   for f in (note_source, bend_source, gate_source)):
+                   for f in (note_source, gate_source)):
                 continue
 
             note_raw = self.hand_smoothed[hand_id][note_source]
-            bend_raw = self.hand_smoothed[hand_id][bend_source]
             gate_raw = self.hand_smoothed[hand_id][gate_source]
 
-            # Normalise using each feature's own range
             norm_range_note = preset.feature_configs[note_source]["norm_range"]
             norm_note = normalize.normalize_value(note_raw, norm_range_note[0], norm_range_note[1])
-
-            norm_range_bend = preset.feature_configs[bend_source]["norm_range"]
-            norm_bend = normalize.normalize_value(bend_raw, norm_range_bend[0], norm_range_bend[1])
 
             note_config = {
                 'note_min': note_cfg['note_min'],
@@ -236,7 +228,7 @@ class MotionControllerApp:
             }
 
             actions = self.note_engine.update(
-                hand_id, norm_note, norm_bend, gate_raw,
+                hand_id, norm_note, gate_raw,
                 current_time, note_config
             )
 
@@ -247,9 +239,22 @@ class MotionControllerApp:
                 elif action[0] == 'note_off':
                     _, hand, note = action
                     self._send_note_off(hand, note)
-                elif action[0] == 'pitch_bend':
-                    _, hand, bend = action
-                    self._send_pitch_bend(hand, bend)
+
+    def _process_pitch_bend(self):
+        for hand_id in (0, 1):
+            preset_idx = self.hand_preset[hand_id]
+            if preset_idx == 0:
+                continue
+            preset = PRESETS[preset_idx]
+            if preset.pitch_bend_config is None:
+                continue
+            hand_offset = self._get_hand_offset(hand_id)
+            result = self.pitch_bend.process_hand(
+                hand_id, preset, self.hand_smoothed[hand_id], hand_offset
+            )
+            if result is not None:
+                channel, bend = result
+                self._send_pitch_bend_raw(channel, bend)
 
     # ------------------------------------------------------------------
     # Preset switching
@@ -259,18 +264,24 @@ class MotionControllerApp:
         Change preset for a specific hand.
         Turns off any active note, resets pitch bend, re-initialises filters.
         """
+        # 1. Stop any active note
         actions = self.note_engine.stop(hand_id)
         for action in actions:
             if action[0] == 'note_off':
                 _, hand, note = action
                 self._send_note_off(hand, note)
-            elif action[0] == 'pitch_bend':
-                _, hand, bend = action
-                self._send_pitch_bend(hand, bend)
 
+        # 2. Reset pitch bend on the OLD preset's channel
+        old_preset = PRESETS[self.hand_preset[hand_id]]
+        hand_offset = self._get_hand_offset(hand_id)
+        old_channel = self.pitch_bend.get_channel(old_preset, hand_offset)
+        if old_channel is not None:
+            self._send_pitch_bend_raw(old_channel, 0)
+        self.pitch_bend.reset_hand(hand_id)
+
+        # 3. Apply the new preset
         if preset_idx < 0 or preset_idx >= len(PRESETS):
             return
-
         self.hand_preset[hand_id] = preset_idx
         self._init_hand(hand_id)
 
@@ -284,11 +295,11 @@ class MotionControllerApp:
         if preset.note_config is None:
             return
         base_ch = preset.note_config['channel']
-        hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+        hand_offset = self._get_hand_offset(hand_id)
         channel = min(15, max(0, base_ch + hand_offset))
         msg = mido.Message('note_on', channel=channel, note=note, velocity=velocity)
         self.midi_out.port.send(msg)
-        print(f"Note ON: hand{hand_id} ch{channel+1} note{note}")
+        print(f"Note ON: hand{hand_id} ch{channel + 1} note{note}")
 
     def _send_note_off(self, hand_id, note):
         if self.midi_out is None or not self.midi_out.port:
@@ -297,35 +308,45 @@ class MotionControllerApp:
         if preset.note_config is None:
             return
         base_ch = preset.note_config['channel']
-        hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+        hand_offset = self._get_hand_offset(hand_id)
         channel = min(15, max(0, base_ch + hand_offset))
         msg = mido.Message('note_off', channel=channel, note=note, velocity=0)
         self.midi_out.port.send(msg)
-        print(f"Note OFF: hand{hand_id} ch{channel+1} note{note}")
+        print(f"Note OFF: hand{hand_id} ch{channel + 1} note{note}")
 
-    def _send_pitch_bend(self, hand_id, bend_value):
+    def _send_pitch_bend_raw(self, channel, bend_value):
         if self.midi_out is None or not self.midi_out.port:
             return
-        preset = PRESETS[self.hand_preset[hand_id]]
-        if preset.note_config is None:
-            return
-        base_ch = preset.note_config['channel']
-        hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
-        channel = min(15, max(0, base_ch + hand_offset))
         bend_value = int(round(bend_value))
         bend_value = max(-8192, min(8191, bend_value))
         msg = mido.Message('pitchwheel', channel=channel, pitch=bend_value)
         self.midi_out.port.send(msg)
 
     def _note_cleanup(self):
+        # 1. Turn off any active notes
         actions = self.note_engine.cleanup()
         for action in actions:
             if action[0] == 'note_off':
                 _, hand, note = action
                 self._send_note_off(hand, note)
-            elif action[0] == 'pitch_bend':
-                _, hand, bend = action
-                self._send_pitch_bend(hand, bend)
+
+        # 2. Reset pitch bend to center on every active preset's bend channel
+        for hand_id in (0, 1):
+            preset = PRESETS[self.hand_preset[hand_id]]
+            if preset.pitch_bend_config is None:
+                continue
+            hand_offset = self._get_hand_offset(hand_id)
+            channel = self.pitch_bend.get_channel(preset, hand_offset)
+            if channel is not None:
+                self._send_pitch_bend_raw(channel, 0)
+        self.pitch_bend.reset()
+
+    def _get_hand_offset(self, hand_id):
+        """Return 0 if the preset ignores hand offsets; otherwise the standard offset."""
+        preset = PRESETS[self.hand_preset[hand_id]]
+        if not preset.apply_channel_offset:
+            return 0
+        return config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
 
     # ------------------------------------------------------------------
     # Per‑hand processing (drawing & filtering)
@@ -394,36 +415,34 @@ class MotionControllerApp:
     # Main loop helpers
     # ------------------------------------------------------------------
     def _process_frame(self, frame, results):
-        """
-        Handles one frame: tracking, filtering, MIDI CC, note generation.
-        Returns the (possibly drawn) frame.
-        """
         h, w = frame.shape[:2]
 
-        # ---- 1. Detect hands with labels ----
+        # 1. Detect hands
         detected_hands = self._detect_hands(results)
 
-        # ---- 2. Match to stable tracks and process (draw & filter) ----
+        # 2. Match to tracks + filter + draw
         self._process_detected_hands(detected_hands, frame, w, h)
 
-        # ---- 3. Send MIDI CC messages ----
+        # 3. MIDI CC
         messages_to_send = []
         for hand_id in (0, 1):
             preset_idx = self.hand_preset[hand_id]
             if preset_idx == 0:
                 continue
             preset = PRESETS[preset_idx]
-            hand_offset = config.LEFT_HAND_CHANNEL_OFFSET if hand_id == 0 else config.RIGHT_HAND_CHANNEL_OFFSET
+            hand_offset = self._get_hand_offset(hand_id)
             messages = self.midi_cc.process_hand(
                 hand_id, preset, self.hand_smoothed[hand_id], hand_offset
             )
             messages_to_send.extend(messages)
-
         if messages_to_send:
             self.midi_out.send_messages(messages_to_send)
 
-        # ---- 4. Note generation ----
+        # 4. Notes
         self._process_notes()
+
+        # 5. Pitch bend
+        self._process_pitch_bend()
 
         return frame
 

@@ -267,34 +267,46 @@ class UIRenderer:
         # 2. Note info
         if preset.note_config is not None:
             note_cfg = preset.note_config
-            for src in [note_cfg["note_source"], note_cfg["bend_source"], note_cfg["gate_source"]]:
+            for src in [note_cfg["note_source"], note_cfg["gate_source"]]:
                 if src in hand_smoothed[hand_id] and hand_smoothed[hand_id][src] is not None:
                     raw = hand_smoothed[hand_id][src]
                     norm = get_norm(src)
                     if norm is not None:
                         text = f"{src}: {raw:.2f} (norm {norm:.2f})"
-                        self._draw_text(canvas, text, (x_off+10, y_pos),
-                                        (200,200,200), font_scale)
+                        self._draw_text(canvas, text, (x_off + 10, y_pos),
+                                        (200, 200, 200), font_scale)
                         y_pos += int(20 * font_scale * 2)
                         anything_drawn = True
 
             if note_state is not None and len(note_state) > hand_id:
                 state = note_state[hand_id]
                 if state['active']:
-                    bend_src = note_cfg["bend_source"]
-                    if bend_src in hand_smoothed[hand_id] and hand_smoothed[hand_id][bend_src] is not None:
-                        norm_bend = get_norm(bend_src)
-                        bend_now = int(round((norm_bend - 0.5) * 16384)) if norm_bend is not None else 0
-                    else:
-                        bend_now = 0
-                    text = f"Note ON  note={state['note']}  bend={bend_now}"
-                    self._draw_text(canvas, text, (x_off+10, y_pos),
-                                    (0,255,0), font_scale)
+                    text = f"Note ON  note={state['note']}"
+                    self._draw_text(canvas, text, (x_off + 10, y_pos),
+                                    (0, 255, 0), font_scale)
                 else:
-                    self._draw_text(canvas, "Note OFF", (x_off+10, y_pos),
-                                    (100,100,100), font_scale)
+                    self._draw_text(canvas, "Note OFF", (x_off + 10, y_pos),
+                                    (100, 100, 100), font_scale)
                 y_pos += int(20 * font_scale * 2)
                 anything_drawn = True
+
+        # 3. Pitch bend info
+        if preset.pitch_bend_config is not None:
+            pb_cfg = preset.pitch_bend_config
+            src = pb_cfg["source"]
+            if src in hand_smoothed[hand_id] and hand_smoothed[hand_id][src] is not None:
+                raw = hand_smoothed[hand_id][src]
+                norm = get_norm(src)
+                if norm is not None:
+                    if pb_cfg.get("invert", False):
+                        norm = 1.0 - norm
+                    bend_now = int(round((norm - 0.5) * 16384))
+                    bend_now = max(-8192, min(8191, bend_now))
+                    text = f"bend({src}): {raw:.2f} -> {bend_now}"
+                    self._draw_text(canvas, text, (x_off + 10, y_pos),
+                                    (200, 150, 255), font_scale)
+                    y_pos += int(20 * font_scale * 2)
+                    anything_drawn = True
 
         if not anything_drawn:
             self._draw_text(canvas, "(waiting for hand)", (x_off+10, y_pos),

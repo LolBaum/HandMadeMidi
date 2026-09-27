@@ -1,17 +1,12 @@
 # presets.yaml
-# All presets are listed in order. The first preset (index 0) is "Off".
-# You can add, remove, or reorder presets.
-# The "features" dictionary maps a feature name to its configuration:
-#   - midi: [channel, cc] or null (if no MIDI mapping)
-#   - norm_range: [min, max]
-#   - filter: [min_cutoff, beta]
-# The "note_config" is optional; if present, it enables note generation.
 
 - name: "Off"
   features: {}
   note_config: null
+  pitch_bend: null
   deadband: 0.01
   mirror_left_hand: false
+  apply_channel_offset: true
 
 - name: "Pitch/Roll"
   features:
@@ -24,8 +19,10 @@
       norm_range: [-100, 180]
       filter: [0.5, 0.2]
   note_config: null
+  pitch_bend: null
   deadband: 0.01
   mirror_left_hand: true
+  apply_channel_offset: true
 
 - name: "Position"
   features:
@@ -38,8 +35,10 @@
       norm_range: [0.1, 0.9]
       filter: [0.3, 0.1]
   note_config: null
+  pitch_bend: null
   deadband: 0.015
   mirror_left_hand: false
+  apply_channel_offset: true
 
 - name: "Finger Spread"
   features:
@@ -48,8 +47,10 @@
       norm_range: [0.0, 1.2]
       filter: [0.4, 0.15]
   note_config: null
+  pitch_bend: null
   deadband: 0.01
   mirror_left_hand: true
+  apply_channel_offset: true
 
 - name: "Fist"
   features:
@@ -58,8 +59,10 @@
       norm_range: [0.0, 1.0]
       filter: [0.3, 0.1]
   note_config: null
+  pitch_bend: null
   deadband: 0.01
   mirror_left_hand: true
+  apply_channel_offset: true
 
 - name: "Multi"
   features:
@@ -92,8 +95,10 @@
       norm_range: [0.05, 0.7]
       filter: [0.3, 0.1]
   note_config: null
+  pitch_bend: null
   deadband: 0.015
   mirror_left_hand: false
+  apply_channel_offset: true
 
 - name: "Note Gen"
   features:
@@ -132,7 +137,45 @@
     threshold: 0.5
     timeout: 20.0
     note_source: "palm_y"
-    bend_source: "palm_x"
     gate_source: "thumb_index_dist"
+  pitch_bend:
+    source: "palm_x"
+    channel: 1
+    deadband: 0.0005
+    invert: false
   deadband: 0.015
   mirror_left_hand: false
+  apply_channel_offset: true
+
+# ---------------------------------------------------------------------
+# Theremin presets.  Both target channel 1 with apply_channel_offset: false
+# so that left and right hands share the same MIDI channel and control the
+# SAME instrument.  Assign one preset to each hand for a classic theremin.
+# ---------------------------------------------------------------------
+- name: "Theremin Volume"
+  features:
+    palm_y:
+      midi: [1, 11]              # CC 11 (Expression) — raise hand = louder
+      norm_range: [0.3, 0.8]
+      filter: [0.5, 0.2]
+  note_config: null
+  pitch_bend: null
+  deadband: 0.005
+  mirror_left_hand: true
+  apply_channel_offset: false
+
+- name: "Theremin Pitch"
+  features:
+    palm_y:
+      midi: null                 # Not sent as CC — only drives pitch bend
+      norm_range: [0.3, 0.8]
+      filter: [0.5, 0.2]
+  note_config: null
+  pitch_bend:
+    source: "palm_y"
+    channel: 1
+    deadband: 0.0005
+    invert: false
+  deadband: 0.005
+  mirror_left_hand: true
+  apply_channel_offset: false

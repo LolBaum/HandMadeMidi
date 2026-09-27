@@ -3,7 +3,6 @@ import yaml
 from hand_features import HandFeatures
 from default_presets import DEFAULT_PRESETS_DATA
 
-# Mapping from feature name to its extracting function
 FEATURE_FUNCS = {
     "palm_x": HandFeatures.palm_x,
     "palm_y": HandFeatures.palm_y,
@@ -15,23 +14,19 @@ FEATURE_FUNCS = {
 }
 
 class Preset:
-    def __init__(self, name, feature_configs, note_config=None, deadband=0.01, mirror_left_hand=True):
-        """
-        feature_configs: dict { feature_name: { "midi": (channel, cc) or None,
-                                                 "norm_range": (min, max),
-                                                 "filter": (min_cutoff, beta) } }
-        note_config: dict with keys: channel, note_min, note_max, threshold, timeout,
-                                     note_source, bend_source, gate_source
-        """
+    def __init__(self, name, feature_configs, note_config=None,
+                 pitch_bend_config=None, deadband=0.01,
+                 mirror_left_hand=True, apply_channel_offset=True):
         self.name = name
         self.feature_configs = feature_configs
         self.features = list(feature_configs.keys())
         self.note_config = note_config
+        self.pitch_bend_config = pitch_bend_config
         self.deadband = deadband
         self.mirror_left_hand = mirror_left_hand
+        self.apply_channel_offset = apply_channel_offset
 
     def get_features(self, landmarks):
-        """Return a dict of raw feature values for all features in this preset."""
         result = {}
         for feature in self.features:
             func = FEATURE_FUNCS[feature]
@@ -39,60 +34,36 @@ class Preset:
         return result
 
 
-# ----------------------------------------------------------------------
-# YAML loader
-# ----------------------------------------------------------------------
+def _preset_from_dict(item):
+    item.setdefault('deadband', 0.01)
+    item.setdefault('mirror_left_hand', True)
+    item.setdefault('features', {})
+    item.setdefault('note_config', None)
+    item.setdefault('pitch_bend', None)
+    item.setdefault('apply_channel_offset', True)
+    if not isinstance(item['features'], dict):
+        item['features'] = {}
+    return Preset(
+        name=item['name'],
+        feature_configs=item['features'],
+        note_config=item['note_config'],
+        pitch_bend_config=item['pitch_bend'],
+        deadband=item['deadband'],
+        mirror_left_hand=item['mirror_left_hand'],
+        apply_channel_offset=item['apply_channel_offset'],
+    )
+
+
 def load_presets_from_yaml(filepath="presets.yaml"):
-    """
-    Load presets from a YAML file.
-    Returns a list of Preset objects.
-    """
     with open(filepath, 'r') as f:
         data = yaml.safe_load(f)
+    return [_preset_from_dict(item) for item in data]
 
-    presets = []
-    for item in data:
-        # Apply defaults for optional fields
-        item.setdefault('deadband', 0.01)
-        item.setdefault('mirror_left_hand', True)
-        item.setdefault('features', {})
-        item.setdefault('note_config', None)
-
-        # Ensure features is a dict
-        if not isinstance(item['features'], dict):
-            item['features'] = {}
-
-        presets.append(Preset(
-            name=item['name'],
-            feature_configs=item['features'],
-            note_config=item['note_config'],
-            deadband=item['deadband'],
-            mirror_left_hand=item['mirror_left_hand']
-        ))
-    return presets
 
 def _presets_from_data(data):
-    """Convert a list of dicts (like the YAML structure) into Preset objects."""
-    presets = []
-    for item in data:
-        item.setdefault('deadband', 0.01)
-        item.setdefault('mirror_left_hand', True)
-        item.setdefault('features', {})
-        item.setdefault('note_config', None)
-        if not isinstance(item['features'], dict):
-            item['features'] = {}
-        presets.append(Preset(
-            name=item['name'],
-            feature_configs=item['features'],
-            note_config=item['note_config'],
-            deadband=item['deadband'],
-            mirror_left_hand=item['mirror_left_hand']
-        ))
-    return presets
+    return [_preset_from_dict(item) for item in data]
 
-# ----------------------------------------------------------------------
-# Load presets – try YAML first, fallback to default data
-# ----------------------------------------------------------------------
+
 try:
     PRESETS = load_presets_from_yaml()
     print(f"Loaded {len(PRESETS)} presets from presets.yaml")
